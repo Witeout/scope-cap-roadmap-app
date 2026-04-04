@@ -100,4 +100,21 @@ export const useUIStore = create(set => ({
 
   // ── Drag state (non-reactive, managed externally by dnd-kit) ──────────────
   // dnd-kit manages its own drag state; nothing to store here.
+
+  // ── Team group filter ──────────────────────────────────────────────────────
+  teamGroupFilter: null,
+  setTeamGroupFilter: teamGroupFilter => set({ teamGroupFilter }),
+
+  // ── Release collapse state ─────────────────────────────────────────────────
+  // Map of { [releaseId]: true } for collapsed releases
+  collapsedReleases: {},
+  toggleReleaseCollapsed: id =>
+    set(s => ({ collapsedReleases: { ...s.collapsedReleases, [id]: !s.collapsedReleases[id] } })),
+  setReleaseCollapsed: (id, value) =>
+    set(s => ({ collapsedReleases: { ...s.collapsedReleases, [id]: value } })),
+
+  // ── Release filter ────────────────────────────────────────────────────────
+  releaseFilter: null,
+  setReleaseFilter: releaseFilter => set({ releaseFilter }),
+  clearReleaseFilter: () => set({ releaseFilter: null }),
 }))

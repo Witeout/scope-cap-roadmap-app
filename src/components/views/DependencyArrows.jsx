@@ -25,11 +25,17 @@ export default function DependencyArrows({
   LABEL_W,
   ROW_H,
   sprintCount,
+  rowYOffsets,
+  rowHeightsArr,
 }) {
   if (!deps || deps.length === 0) return null
 
   const totalW = LABEL_W + sprintCount * SPRINT_W
-  const totalH = ROW_H + rows.length * ROW_H
+  // Use variable-height total if available
+  const dataH = rowYOffsets && rowHeightsArr && rowHeightsArr.length > 0
+    ? rowYOffsets[rowYOffsets.length - 1] + rowHeightsArr[rowHeightsArr.length - 1]
+    : rows.length * ROW_H
+  const totalH = ROW_H + dataH
 
   // Build row index map
   const rowIndexMap = {}
@@ -49,8 +55,14 @@ export default function DependencyArrows({
     // Arrow goes from the end of the predecessor (toId) to the start of the dependent (fromId)
     const bEndX   = LABEL_W + (bRange.endIndex   + 1) * SPRINT_W - 10
     const dStartX = LABEL_W +  dRange.startIndex      * SPRINT_W + 10
-    const bY      = ROW_H   + bRowIdx * ROW_H + ROW_H / 2
-    const dY      = ROW_H   + dRowIdx * ROW_H + ROW_H / 2
+
+    // Y centre of each row — use per-row offsets when available
+    const bRowH = rowHeightsArr ? (rowHeightsArr[bRowIdx] ?? ROW_H) : ROW_H
+    const dRowH = rowHeightsArr ? (rowHeightsArr[dRowIdx] ?? ROW_H) : ROW_H
+    const bYOff = rowYOffsets   ? (rowYOffsets[bRowIdx]   ?? bRowIdx * ROW_H) : bRowIdx * ROW_H
+    const dYOff = rowYOffsets   ? (rowYOffsets[dRowIdx]   ?? dRowIdx * ROW_H) : dRowIdx * ROW_H
+    const bY    = ROW_H + bYOff + bRowH / 2
+    const dY    = ROW_H + dYOff + dRowH / 2
 
     let d
     if (dStartX > bEndX + 10) {
@@ -60,7 +72,7 @@ export default function DependencyArrows({
     } else {
       // Backward / same-column: route around rows
       const exitX   = bEndX + 36
-      const bypassY = Math.max(bY, dY) + ROW_H * 0.7
+      const bypassY = Math.max(bY, dY) + Math.max(bRowH, dRowH) * 0.7
       const entryX  = dStartX - 20
       d = `M${bEndX},${bY}` +
           ` C${exitX},${bY} ${exitX},${bypassY} ${(exitX + entryX) / 2},${bypassY}` +

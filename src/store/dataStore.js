@@ -14,9 +14,27 @@ function migrate(data) {
   if (!data.scenarios) data.scenarios = []
   if (!data.counters.scenario) data.counters.scenario = 0
   if (!data.summaryNotes) data.summaryNotes = {}
+  if (!data.teamGroups) data.teamGroups = []
+  if (!data.counters.teamGroup) data.counters.teamGroup = 0
 
   // Normalize tasks
-  data.tasks.forEach(t => { if (t.sprintId === undefined) t.sprintId = null })
+  data.tasks.forEach(t => {
+    if (t.sprintId === undefined) t.sprintId = null
+    if (t.teamId === undefined) t.teamId = null
+    if (t.releaseId === undefined) t.releaseId = null
+  })
+
+  // Normalize epics
+  data.epics.forEach(e => {
+    if (e.teamId === undefined) e.teamId = null
+    if (e.releaseId === undefined) e.releaseId = null
+  })
+
+  // Normalize initiatives
+  data.initiatives.forEach(i => {
+    if (i.teamId === undefined) i.teamId = null
+    if (i.releaseId === undefined) i.releaseId = null
+  })
 
   // Normalize team members
   data.team.forEach(m => {
@@ -62,18 +80,39 @@ function migrate(data) {
       startDate: '2026-01-01',
       endDate: null,
       ongoing: true,
-      milestones: [
-        { id: 'MS-1', name: 'Project Kick-off',  date: null, order: 0, fixed: true },
-        { id: 'MS-2', name: 'Pre-Production',     date: null, order: 1, fixed: true },
-        { id: 'MS-3', name: 'Production',         date: null, order: 2, fixed: true },
-        { id: 'MS-4', name: 'Alpha',              date: null, order: 3, fixed: true },
-        { id: 'MS-5', name: 'Beta',               date: null, order: 4, fixed: true },
-        { id: 'MS-6', name: 'Final',              date: null, order: 5, fixed: true },
-      ],
+      releases: [],
       bufferPercent: 0,
     }
   }
-  if (!data.counters.milestone) data.counters.milestone = 6
+
+  // ── Migrate flat milestones → first release ──────────────────────────────
+  // If releases don't exist yet but legacy milestones do, wrap them in a release
+  if (!data.project.releases) {
+    const legacyMilestones = data.project.milestones ?? []
+    data.project.releases = legacyMilestones.length > 0
+      ? [{
+          id: 'REL-1',
+          name: 'Major Milestones',
+          startDate: data.project.startDate ?? '2026-01-01',
+          endDate: data.project.endDate ?? null,
+          color: '#4a6fa5',
+          order: 0,
+          milestones: legacyMilestones,
+        }]
+      : []
+    delete data.project.milestones
+    if (!data.counters.release) {
+      data.counters.release = data.project.releases.length
+    }
+  }
+
+  if (!data.counters.release) data.counters.release = data.project.releases.length
+
+  // Ensure each release has a milestones array
+  data.project.releases.forEach(r => { if (!r.milestones) r.milestones = [] })
+
+  // Keep legacy milestone counter as a fallback seed for new milestones
+  if (!data.counters.milestone) data.counters.milestone = 0
   if (!data.project.sprintCapacities) data.project.sprintCapacities = {}
 
   return data
@@ -162,7 +201,13 @@ export const useDataStore = create((set, get) => {
 
       if (!coll) return null
       const maxOrder = coll.length ? Math.max(...coll.map(i => i.order ?? 0)) + 1 : 0
-      const item = { id, order: maxOrder, ...fields }
+
+      // Add teamId to tasks, epics, initiatives
+      let item = { id, order: maxOrder, ...fields }
+      if (type === 'task' || type === 'epic' || type === 'initiative') {
+        item.teamId = fields.teamId ?? null
+      }
+
       coll.push(item)
       get()._save(data)
       return item
@@ -357,6 +402,62 @@ export const useDataStore = create((set, get) => {
       }
     },
 
+    // ── Team Groups ────────────────────────────────────────────────────────
+    createTeamGroup(name, color) {
+      const data = structuredClone(get().data)
+      data.counters.teamGroup++
+      const id = `TG-${data.counters.teamGroup}`
+      const group = { id, name, color, members: [] }
+      data.teamGroups.push(group)
+      get()._save(data)
+      return group
+    },
+
+    updateTeamGroup(id, updates) {
+      const data = structuredClone(get().data)
+      const group = data.teamGroups.find(g => g.id === id)
+      if (group) Object.assign(group, updates)
+      get()._save(data)
+    },
+
+    removeTeamGroup(id) {
+      const data = structuredClone(get().data)
+      data.teamGroups = data.teamGroups.filter(g => g.id !== id)
+      // Null out teamId on any items referencing this group
+      data.tasks.forEach(t => { if (t.teamId === id) t.teamId = null })
+      data.epics.forEach(e => { if (e.teamId === id) e.teamId = null })
+      data.initiatives.forEach(i => { if (i.teamId === id) i.teamId = null })
+      get()._save(data)
+    },
+
+    addTeamGroupMember(groupId, memberId, allocation) {
+      const data = structuredClone(get().data)
+      const group = data.teamGroups.find(g => g.id === groupId)
+      if (group && !group.members.some(m => m.memberId === memberId)) {
+        group.members.push({ memberId, allocation })
+      }
+      get()._save(data)
+    },
+
+    updateTeamGroupMember(groupId, memberId, allocation) {
+      const data = structuredClone(get().data)
+      const group = data.teamGroups.find(g => g.id === groupId)
+      if (group) {
+        const member = group.members.find(m => m.memberId === memberId)
+        if (member) member.allocation = allocation
+      }
+      get()._save(data)
+    },
+
+    removeTeamGroupMember(groupId, memberId) {
+      const data = structuredClone(get().data)
+      const group = data.teamGroups.find(g => g.id === groupId)
+      if (group) {
+        group.members = group.members.filter(m => m.memberId !== memberId)
+      }
+      get()._save(data)
+    },
+
     // ── Team ───────────────────────────────────────────────────────────────
     updateTeamMember(id, updates) {
       get().updateItem('member', id, updates)
@@ -366,26 +467,84 @@ export const useDataStore = create((set, get) => {
       get().removeItem('member', id)
     },
 
-    // ── Milestones ─────────────────────────────────────────────────────────
-    updateMilestone(id, updates) {
+    // ── Releases ───────────────────────────────────────────────────────────
+    addRelease(fields) {
       const data = structuredClone(get().data)
-      const ms = data.project.milestones?.find(m => m.id === id)
-      if (ms) Object.assign(ms, updates)
+      data.counters.release = (data.counters.release || 0) + 1
+      const release = {
+        id: `REL-${data.counters.release}`,
+        name: 'New Release',
+        startDate: null,
+        endDate: null,
+        color: '#4a6fa5',
+        order: data.project.releases.length,
+        milestones: [],
+        ...fields,
+      }
+      data.project.releases.push(release)
+      get()._save(data)
+      return release
+    },
+
+    updateRelease(id, updates) {
+      const data = structuredClone(get().data)
+      const release = data.project.releases.find(r => r.id === id)
+      if (release) Object.assign(release, updates)
       get()._save(data)
     },
 
-    addMilestone(fields) {
+    removeRelease(id) {
       const data = structuredClone(get().data)
+      data.project.releases = data.project.releases.filter(r => r.id !== id)
+      // Null out releaseId on items referencing this release
+      data.initiatives.forEach(i => { if (i.releaseId === id) i.releaseId = null })
+      data.epics.forEach(e => { if (e.releaseId === id) e.releaseId = null })
+      data.tasks.forEach(t => { if (t.releaseId === id) t.releaseId = null })
+      get()._save(data)
+    },
+
+    // ── Milestones (scoped to a release) ──────────────────────────────────
+    // Find a milestone by ID across all releases
+    _findMilestone(data, id) {
+      for (const r of data.project.releases) {
+        const ms = r.milestones?.find(m => m.id === id)
+        if (ms) return { release: r, milestone: ms }
+      }
+      return null
+    },
+
+    updateMilestone(id, updates) {
+      const data = structuredClone(get().data)
+      const found = get()._findMilestone(data, id)
+      if (found) Object.assign(found.milestone, updates)
+      get()._save(data)
+    },
+
+    addMilestone(releaseId, fields) {
+      const data = structuredClone(get().data)
+      const release = data.project.releases.find(r => r.id === releaseId)
+      if (!release) return null
       data.counters.milestone = (data.counters.milestone || 0) + 1
-      const milestone = { id: `MS-${data.counters.milestone}`, order: data.project.milestones.length, ...fields }
-      data.project.milestones.push(milestone)
+      const milestone = {
+        id: `MS-${data.counters.milestone}`,
+        order: release.milestones.length,
+        name: '',
+        date: null,
+        fixed: false,
+        ...fields,
+      }
+      release.milestones.push(milestone)
       get()._save(data)
       return milestone
     },
 
     removeMilestone(id) {
       const data = structuredClone(get().data)
-      data.project.milestones = data.project.milestones.filter(m => m.id !== id)
+      for (const r of data.project.releases) {
+        const before = r.milestones.length
+        r.milestones = r.milestones.filter(m => m.id !== id)
+        if (r.milestones.length !== before) break
+      }
       get()._save(data)
     },
   }

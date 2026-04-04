@@ -206,47 +206,112 @@ export function computeSprintDelta(itemId, type, delta, sprints, data, scenario)
 
 /**
  * Build the flat ordered row array for the Gantt grid.
- * Same hierarchy logic as StructureView but without filters.
+ * When releases are present, rows are grouped under releaseHeader sentinel rows.
+ * Each data row carries a releaseId property for downstream filtering.
+ *
+ * Row shapes:
+ *   { type: 'releaseHeader', item: release, indent: 0, releaseId: release.id }
+ *   { item, type: 'initiative'|'epic'|'task', indent, releaseId }
  *
  * @param {object} data
  * @param {object|null} scenario
- * @returns {Array<{ item: object, type: string, indent: number }>}
+ * @returns {Array}
  */
 export function buildGanttRows(data, scenario) {
   const activeTasks = scenario
     ? [...data.tasks, ...(scenario.tasks || [])]
     : data.tasks
 
-  const sorted = arr => [...arr].sort((a, b) => a.order - b.order)
+  const sort = arr => [...arr].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  const releases = sort(data.project?.releases ?? [])
   const rows = []
 
-  for (const ini of sorted(data.initiatives)) {
-    rows.push({ item: ini, type: 'initiative', indent: 0 })
-    for (const epic of sorted(data.epics.filter(e => e.initiativeId === ini.id))) {
-      rows.push({ item: epic, type: 'epic', indent: 1 })
-      for (const task of sorted(activeTasks.filter(t => t.epicId === epic.id))) {
-        rows.push({ item: task, type: 'task', indent: 2 })
+  // Track rendered items so we can collect unassigned leftovers
+  const renderedIniIds  = new Set()
+  const renderedEpicIds = new Set()
+  const renderedTaskIds = new Set()
+
+  // Helper: render an initiative and all its children
+  function renderIni(ini, releaseId) {
+    rows.push({ item: ini, type: 'initiative', indent: 0, releaseId })
+    renderedIniIds.add(ini.id)
+    for (const epic of sort(data.epics.filter(e => e.initiativeId === ini.id))) {
+      rows.push({ item: epic, type: 'epic', indent: 1, releaseId })
+      renderedEpicIds.add(epic.id)
+      for (const task of sort(activeTasks.filter(t => t.epicId === epic.id))) {
+        rows.push({ item: task, type: 'task', indent: 2, releaseId })
+        renderedTaskIds.add(task.id)
       }
     }
   }
 
-  // Orphan epics
-  const linkedEpicIds = new Set(
-    data.epics.filter(e => e.initiativeId && data.initiatives.find(i => i.id === e.initiativeId)).map(e => e.id)
-  )
-  for (const epic of sorted(data.epics.filter(e => !linkedEpicIds.has(e.id)))) {
-    rows.push({ item: epic, type: 'epic', indent: 0 })
-    for (const task of sorted(activeTasks.filter(t => t.epicId === epic.id))) {
-      rows.push({ item: task, type: 'task', indent: 1 })
+  // Helper: render a standalone epic and its tasks
+  function renderEpic(epic, indent, releaseId) {
+    rows.push({ item: epic, type: 'epic', indent, releaseId })
+    renderedEpicIds.add(epic.id)
+    for (const task of sort(activeTasks.filter(t => t.epicId === epic.id))) {
+      rows.push({ item: task, type: 'task', indent: indent + 1, releaseId })
+      renderedTaskIds.add(task.id)
     }
   }
 
-  // Orphan tasks
-  const linkedTaskIds = new Set(
-    activeTasks.filter(t => t.epicId && data.epics.find(e => e.id === t.epicId)).map(t => t.id)
-  )
-  for (const task of sorted(activeTasks.filter(t => !linkedTaskIds.has(t.id)))) {
-    rows.push({ item: task, type: 'task', indent: 0 })
+  if (releases.length > 0) {
+    // ── Render each release group ───────────────────────────────────────────
+    for (const release of releases) {
+      rows.push({ type: 'releaseHeader', item: release, indent: 0, releaseId: release.id })
+
+      // Initiatives belonging to this release
+      for (const ini of sort(data.initiatives.filter(i => i.releaseId === release.id))) {
+        renderIni(ini, release.id)
+      }
+
+      // Orphan epics explicitly tagged to this release (no parent ini, or parent not in this release)
+      for (const epic of sort(data.epics.filter(e =>
+        e.releaseId === release.id &&
+        !renderedEpicIds.has(e.id) &&
+        !(e.initiativeId && data.initiatives.find(i => i.id === e.initiativeId && i.releaseId === release.id))
+      ))) {
+        renderEpic(epic, 0, release.id)
+      }
+    }
+
+    // ── Unassigned group ───────────────────────────────────────────────────
+    const unassignedInits = sort(data.initiatives.filter(i => !renderedIniIds.has(i.id)))
+    const unassignedEpics = sort(data.epics.filter(e =>
+      !renderedEpicIds.has(e.id) &&
+      !(e.initiativeId && data.initiatives.find(i => i.id === e.initiativeId))
+    ))
+    const unassignedTasks = sort(activeTasks.filter(t =>
+      !renderedTaskIds.has(t.id) &&
+      !(t.epicId && data.epics.find(e => e.id === t.epicId))
+    ))
+
+    if (unassignedInits.length > 0 || unassignedEpics.length > 0 || unassignedTasks.length > 0) {
+      const UNASSIGNED = { id: null, name: 'Unassigned', color: '#9e9f95', startDate: null, endDate: null }
+      rows.push({ type: 'releaseHeader', item: UNASSIGNED, indent: 0, releaseId: null })
+      for (const ini  of unassignedInits) renderIni(ini, null)
+      for (const epic of unassignedEpics) renderEpic(epic, 0, null)
+      for (const task of unassignedTasks) {
+        rows.push({ item: task, type: 'task', indent: 0, releaseId: null })
+        renderedTaskIds.add(task.id)
+      }
+    }
+
+  } else {
+    // ── No releases — original flat layout ─────────────────────────────────
+    for (const ini of sort(data.initiatives)) {
+      renderIni(ini, null)
+    }
+
+    // Orphan epics
+    for (const epic of sort(data.epics.filter(e => !renderedEpicIds.has(e.id)))) {
+      renderEpic(epic, 0, null)
+    }
+
+    // Orphan tasks
+    for (const task of sort(activeTasks.filter(t => !renderedTaskIds.has(t.id)))) {
+      rows.push({ item: task, type: 'task', indent: 0, releaseId: null })
+    }
   }
 
   return rows

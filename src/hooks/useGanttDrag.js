@@ -4,7 +4,6 @@ import { useUIStore } from '../store/uiStore'
 import { computeSprintDelta } from '../lib/gantt'
 
 const DRAG_THRESHOLD = 4   // px movement before we commit to a drag
-const SPRINT_W       = 100 // must match RoadmapView constant
 
 /**
  * Returns an `attachBarDrag(bar, item, type, range, sprints, LABEL_W, ROW_H)` callback.
@@ -52,7 +51,7 @@ export function useGanttDrag() {
    * @param {number} LABEL_W
    * @param {number} ROW_H
    */
-  const attachBarDrag = useCallback((bar, item, type, range, sprints, LABEL_W, ROW_H) => {
+  const attachBarDrag = useCallback((bar, item, type, range, sprints, LABEL_W, ROW_H, SPRINT_W = 100) => {
     if (!bar) return
 
     const onMouseDown = e => {

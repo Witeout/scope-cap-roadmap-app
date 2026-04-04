@@ -13,15 +13,129 @@ import { useDepDraw }      from '../../hooks/useDepDraw'
 import DependencyArrows    from './DependencyArrows'
 import { TYPE_ICON, TYPE_COLOR } from '../../lib/display'
 import FilterPills from '../ui/FilterPills'
+import { getCapacityInfo } from '../../lib/capacity'
 
 // ─── Layout constants ─────────────────────────────────────────────────────────
-const SPRINT_W = 100
-const ROW_H    = 52
-const MIN_LABEL_W = 140
-const MAX_LABEL_W = 520
+const BASE_SPRINT_W = 100
+const ROW_H         = 52   // sprint header row height (fixed)
+const MIN_LABEL_W   = 140
+const MAX_LABEL_W   = 520
+
+// ─── Row heights by hierarchy ─────────────────────────────────────────────────
+// Tallest → shortest: release header → initiative → epic → task
+const ROW_HEIGHTS = { releaseHeader: 52, initiative: 44, epic: 36, task: 28 }
 
 // ─── Row backgrounds ──────────────────────────────────────────────────────────
 const ROW_BG = { initiative: '#e8e7df', epic: '#efeee6', task: 'white' }
+
+// ─── Release band helper ──────────────────────────────────────────────────────
+function getReleaseBandSpan(release, sprints) {
+  if (!release.startDate) return null
+  const rStart = new Date(release.startDate); rStart.setHours(0, 0, 0, 0)
+  const rEnd   = release.endDate ? new Date(release.endDate) : null
+  if (rEnd) rEnd.setHours(23, 59, 59, 999)
+
+  const startIdx = sprints.findIndex(s => s.end >= rStart)
+  if (startIdx < 0) return null
+  const endIdx = rEnd
+    ? sprints.reduce((best, s, i) => (s.start <= rEnd ? i : best), -1)
+    : sprints.length - 1
+  if (endIdx < startIdx) return null
+  return { startIdx, endIdx }
+}
+
+// ─── Release header row ───────────────────────────────────────────────────────
+function ReleaseHeaderRow({ release, sprints, SPRINT_W, ROW_H, LABEL_W, collapsed, onToggle }) {
+  const color = release.color || '#9e9f95'
+  const bandSpan = getReleaseBandSpan(release, sprints)
+
+  return (
+    <>
+      {/* Label cell */}
+      <div
+        style={{
+          height: ROW_H,
+          display: 'flex', alignItems: 'center', gap: 6,
+          paddingLeft: 8, paddingRight: 8,
+          background: release.id ? color + '18' : '#f5f4ef',
+          borderBottom: `2px solid ${color}50`,
+          position: 'sticky', left: 0, zIndex: 10,
+          cursor: 'pointer', userSelect: 'none',
+        }}
+        onClick={onToggle}
+      >
+        <span
+          className="material-symbols-outlined"
+          style={{
+            fontSize: 16, flexShrink: 0, color: color,
+            transition: 'transform 0.15s',
+            transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+          }}
+        >
+          expand_more
+        </span>
+        {release.id && (
+          <div style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
+        )}
+        <span style={{ fontSize: 12, fontWeight: 700, color: '#31332c', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', flex: 1 }}>
+          {release.name || 'Unassigned'}
+        </span>
+        {release.startDate && (
+          <span style={{ fontSize: 10, color: '#9e9f95', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            {release.startDate}–{release.endDate ?? '…'}
+          </span>
+        )}
+      </div>
+
+      {/* Sprint span area */}
+      <div
+        style={{
+          gridColumn: `2 / span ${sprints.length}`,
+          height: ROW_H,
+          background: release.id ? color + '08' : '#f5f4ef',
+          borderBottom: `2px solid ${color}50`,
+          position: 'relative',
+          overflow: 'hidden',
+        }}
+      >
+        {bandSpan && (
+          <div style={{
+            position: 'absolute',
+            left: bandSpan.startIdx * SPRINT_W + 3,
+            width: Math.max(0, (bandSpan.endIdx - bandSpan.startIdx + 1) * SPRINT_W - 6),
+            top: 8, bottom: 8,
+            background: color + '28',
+            border: `1.5px solid ${color}80`,
+            borderRadius: 4,
+          }} />
+        )}
+        {/* Milestone diamonds */}
+        {(release.milestones ?? []).filter(ms => ms.date).map(ms => {
+          const d = new Date(ms.date); d.setHours(12, 0, 0, 0)
+          const si = sprints.findIndex(s => d >= s.start && d <= s.end)
+          if (si < 0) return null
+          const cx = si * SPRINT_W + SPRINT_W / 2
+          return (
+            <div
+              key={ms.id}
+              title={`${ms.name}: ${ms.date}`}
+              style={{
+                position: 'absolute',
+                left: cx - 5, top: '50%',
+                transform: 'translateY(-50%) rotate(45deg)',
+                width: 8, height: 8,
+                background: color,
+                border: '1.5px solid white',
+                borderRadius: 1,
+                boxShadow: '0 1px 3px rgba(0,0,0,.25)',
+              }}
+            />
+          )
+        })}
+      </div>
+    </>
+  )
+}
 
 // ─── Roadmap toolbar ──────────────────────────────────────────────────────────
 function RoadmapToolbar({
@@ -268,19 +382,24 @@ export default function RoadmapView() {
     selectedDepId, setSelectedDepId, clearSelectedDep,
     ganttLabelW, setGanttLabelW,
     openPanel, panel,
+    teamGroupFilter, setTeamGroupFilter,
+    collapsedReleases, toggleReleaseCollapsed,
+    releaseFilter, setReleaseFilter, clearReleaseFilter,
   } = useUIStore()
 
   const [showCompareModal, setShowCompareModal] = useState(false)
   const [capacityTip,     setCapacityTip]     = useState(null) // { sprintId, x, y }
   const [showDepIssues,   setShowDepIssues]   = useState(false)
+  const [zoomLevel,       setZoomLevel]       = useState(1)    // 0.5 – 2.0
 
   // ── View filters ───────────────────────────────────────────────────────────
   const ALL_TYPES = new Set(['initiative', 'epic', 'task'])
   const [activeFilters, setActiveFilters] = useState(new Set(ALL_TYPES))
 
   // ── Layout ─────────────────────────────────────────────────────────────────
-  const LABEL_W = ganttLabelW
-  const totalW  = LABEL_W + sprints.length * SPRINT_W
+  const SPRINT_W = Math.round(BASE_SPRINT_W * zoomLevel)
+  const LABEL_W  = ganttLabelW
+  const totalW   = LABEL_W + sprints.length * SPRINT_W
   const curSpId = useMemo(() => currentSprintId(sprints), [sprints])
 
   // ── Scenario / active data ─────────────────────────────────────────────────
@@ -290,17 +409,62 @@ export default function RoadmapView() {
 
   const locked = roadmapLocked && !scenarioId
 
+  // ── Active tasks (scenario-aware) ─────────────────────────────────────────
+  const activeTasks = useMemo(
+    () => activeScenario
+      ? [...data.tasks, ...(activeScenario.tasks || [])]
+      : data.tasks,
+    [data.tasks, activeScenario]
+  )
+
+  // ── Overscoped sprint detection (for sprint header warnings) ──────────────
+  const overscopedSprintIds = useMemo(() => {
+    const set = new Set()
+    const bufferPct = data.project?.bufferPercent ?? 0
+    for (const sp of sprints) {
+      const info = getCapacityInfo(sp.id, data.team, activeTasks, sprints.length, bufferPct)
+      if (info.some(d => d.over)) set.add(sp.id)
+    }
+    return set
+  }, [sprints, data.team, activeTasks, data.project?.bufferPercent])
+
   // ── Build rows ─────────────────────────────────────────────────────────────
   const rows = useMemo(
     () => buildGanttRows(data, activeScenario),
     [data, activeScenario]
   )
 
-  // ── Filter rows by active type filters ─────────────────────────────────────
-  const filteredRows = useMemo(
-    () => rows.filter(r => activeFilters.has(r.type)),
-    [rows, activeFilters]
-  )
+  // ── Filter rows by release collapse, release filter, type filters, team ───
+  const filteredRows = useMemo(() => {
+    let currentReleaseId = undefined  // undefined = no release header seen yet
+    const result = []
+
+    for (const row of rows) {
+      if (row.type === 'releaseHeader') {
+        currentReleaseId = row.item.id
+        // When a release filter is active, skip headers not matching it
+        if (releaseFilter && currentReleaseId !== releaseFilter) continue
+        result.push(row)
+        continue
+      }
+
+      // Skip items in a collapsed release
+      if (currentReleaseId !== undefined && collapsedReleases[currentReleaseId]) continue
+
+      // Skip items not matching release filter
+      if (releaseFilter && row.releaseId !== releaseFilter) continue
+
+      // Type filter
+      if (!activeFilters.has(row.type)) continue
+
+      // Team group filter
+      if (teamGroupFilter && row.item.teamId !== teamGroupFilter) continue
+
+      result.push(row)
+    }
+
+    return result
+  }, [rows, collapsedReleases, releaseFilter, activeFilters, teamGroupFilter])
 
   // ── Compute sprint ranges for every row item ───────────────────────────────
   const ranges = useMemo(() => {
@@ -474,8 +638,25 @@ export default function RoadmapView() {
     }
   }
 
+  // ── Per-row Y offsets for variable-height rows ────────────────────────────
+  const { rowYOffsets, rowHeightsArr } = useMemo(() => {
+    const offsets = []
+    const heights = []
+    let y = 0
+    for (const row of filteredRows) {
+      offsets.push(y)
+      const h = ROW_HEIGHTS[row.type] ?? ROW_H
+      heights.push(h)
+      y += h
+    }
+    return { rowYOffsets: offsets, rowHeightsArr: heights }
+  }, [filteredRows])
+
   // ── Render ─────────────────────────────────────────────────────────────────
-  const totalH = ROW_H + filteredRows.length * ROW_H
+  const dataH  = rowYOffsets.length > 0
+    ? rowYOffsets[rowYOffsets.length - 1] + rowHeightsArr[rowHeightsArr.length - 1]
+    : 0
+  const totalH = ROW_H + dataH
 
   return (
     <div
@@ -498,10 +679,90 @@ export default function RoadmapView() {
         onExitScenario={handleExitScenario}
         onExitCompare={handleExitCompare}
         filterPills={
-          <FilterPills
-            active={activeFilters}
-            onChange={setActiveFilters}
-          />
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', flex: 1 }}>
+            <FilterPills
+              active={activeFilters}
+              onChange={setActiveFilters}
+            />
+            {/* Release filter */}
+            {(data.project?.releases ?? []).length > 0 && (
+              <select
+                value={releaseFilter ?? ''}
+                onChange={e => e.target.value ? setReleaseFilter(e.target.value) : clearReleaseFilter()}
+                style={{
+                  fontSize: 13, fontWeight: 600, padding: '6px 10px',
+                  border: `1px solid ${releaseFilter ? '#4a6fa5' : '#d1cfc4'}`,
+                  borderRadius: 6,
+                  background: releaseFilter ? '#4a6fa510' : '#fbf9f4',
+                  cursor: 'pointer', color: '#31332c',
+                }}
+                title="Filter by release"
+              >
+                <option value="">All Releases</option>
+                {(data.project.releases ?? []).map(r => (
+                  <option key={r.id} value={r.id}>{r.name}</option>
+                ))}
+              </select>
+            )}
+            {/* Team group filter */}
+            {(data.teamGroups ?? []).length > 0 && (
+              <select
+                value={teamGroupFilter ?? ''}
+                onChange={e => setTeamGroupFilter(e.target.value || null)}
+                style={{
+                  fontSize: 13, fontWeight: 600, padding: '6px 10px',
+                  border: '1px solid #d1cfc4',
+                  borderRadius: 6,
+                  background: '#fbf9f4',
+                  cursor: 'pointer', color: '#31332c',
+                }}
+                title="Filter by team"
+              >
+                <option value="">All Teams</option>
+                {(data.teamGroups ?? []).map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+            )}
+
+            {/* Zoom controls */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto', flexShrink: 0 }}>
+              <button
+                title="Zoom out"
+                onClick={() => setZoomLevel(z => Math.max(0.5, +(z - 0.25).toFixed(2)))}
+                disabled={zoomLevel <= 0.5}
+                style={{
+                  width: 26, height: 26, borderRadius: 5, border: '1px solid #d1cfc4',
+                  background: '#fbf9f4', cursor: zoomLevel <= 0.5 ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 16, lineHeight: 1, color: zoomLevel <= 0.5 ? '#c5c6bb' : '#5e6058',
+                  fontWeight: 700, padding: 0,
+                }}
+              >−</button>
+              <button
+                title="Reset zoom to 100%"
+                onClick={() => setZoomLevel(1)}
+                style={{
+                  padding: '3px 7px', borderRadius: 5, border: '1px solid #d1cfc4',
+                  background: zoomLevel !== 1 ? '#4a6fa510' : '#fbf9f4',
+                  cursor: 'pointer', fontSize: 11, fontWeight: 700,
+                  color: zoomLevel !== 1 ? '#4a6fa5' : '#5e6058',
+                }}
+              >{Math.round(zoomLevel * 100)}%</button>
+              <button
+                title="Zoom in"
+                onClick={() => setZoomLevel(z => Math.min(2, +(z + 0.25).toFixed(2)))}
+                disabled={zoomLevel >= 2}
+                style={{
+                  width: 26, height: 26, borderRadius: 5, border: '1px solid #d1cfc4',
+                  background: '#fbf9f4', cursor: zoomLevel >= 2 ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 16, lineHeight: 1, color: zoomLevel >= 2 ? '#c5c6bb' : '#5e6058',
+                  fontWeight: 700, padding: 0,
+                }}
+              >+</button>
+            </div>
+          </div>
         }
         depIssueCount={brokenDeps.length}
         showDepIssues={showDepIssues}
@@ -551,12 +812,8 @@ export default function RoadmapView() {
 
           {/* Sprint header cells */}
           {sprints.map(sp => {
-            const isCur = sp.id === curSpId
-            const sprintMilestones = (data.project?.milestones ?? []).filter(ms => {
-              if (!ms.date) return false
-              const d = new Date(ms.date); d.setHours(12, 0, 0, 0)
-              return d >= sp.start && d <= sp.end
-            })
+            const isCur    = sp.id === curSpId
+            const isOver   = overscopedSprintIds.has(sp.id)
             return (
               <div
                 key={sp.id}
@@ -567,6 +824,8 @@ export default function RoadmapView() {
                   alignItems: 'center', justifyContent: 'center',
                   padding: '2px 4px', position: 'sticky', top: 0, zIndex: 20,
                   overflow: 'hidden',
+                  background: isOver ? 'rgba(180,120,20,0.10)' : undefined,
+                  borderBottom: isOver ? '2px solid rgba(180,120,20,0.40)' : undefined,
                 }}
                 onMouseEnter={e => {
                   const rect = e.currentTarget.getBoundingClientRect()
@@ -574,31 +833,48 @@ export default function RoadmapView() {
                 }}
                 onMouseLeave={() => setCapacityTip(null)}
               >
+                {isOver && (
+                  <span
+                    className="material-symbols-outlined"
+                    style={{ fontSize: 11, color: '#b47814', fontVariationSettings: "'FILL' 1", position: 'absolute', top: 3, right: 3 }}
+                    title="Discipline overscoped in this sprint"
+                  >
+                    warning
+                  </span>
+                )}
                 <span style={{ fontSize: 10, fontWeight: 700, color: isCur ? '#5b5f63' : '#5e6058', whiteSpace: 'nowrap' }}>
                   {sp.label}
                 </span>
                 <span style={{ fontSize: 9, color: '#9e9f95', whiteSpace: 'nowrap' }}>{sp.dates}</span>
                 {isCur && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#5b5f63', marginTop: 2, display: 'block' }} />}
-                {sprintMilestones.map(ms => (
-                  <span
-                    key={ms.id}
-                    style={{ fontSize: 8, fontWeight: 700, background: '#7a583d', color: 'white', borderRadius: 3, padding: '1px 4px', whiteSpace: 'nowrap', maxWidth: 88, overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 2 }}
-                    title={`${ms.name}: ${ms.date}`}
-                  >
-                    {ms.name}
-                  </span>
-                ))}
               </div>
             )
           })}
 
           {/* ── Data rows ── */}
           {filteredRows.map((rowDef, rowIdx) => {
+            // Release header sentinel rows
+            if (rowDef.type === 'releaseHeader') {
+              return (
+                <ReleaseHeaderRow
+                  key={`rel-hdr-${rowDef.item.id ?? 'unassigned'}`}
+                  release={rowDef.item}
+                  sprints={sprints}
+                  SPRINT_W={SPRINT_W}
+                  ROW_H={ROW_H}
+                  LABEL_W={LABEL_W}
+                  collapsed={!!collapsedReleases[rowDef.item.id]}
+                  onToggle={() => toggleReleaseCollapsed(rowDef.item.id)}
+                />
+              )
+            }
+
             const { item, type, indent } = rowDef
             const range     = ranges.get(item.id)
             const baseRange = baseRanges.get(item.id)
             const isSelected = panel.open && panel.id === item.id
 
+            const rowH = ROW_HEIGHTS[type] ?? ROW_H
             return (
               <GanttRow
                 key={item.id}
@@ -616,7 +892,7 @@ export default function RoadmapView() {
                 compareMode={compareMode}
                 scenarioId={scenarioId}
                 SPRINT_W={SPRINT_W}
-                ROW_H={ROW_H}
+                ROW_H={rowH}
                 LABEL_W={LABEL_W}
                 barRegistryRef={barRegistryRef}
                 attachBarDrag={attachBarDrag}
@@ -641,6 +917,8 @@ export default function RoadmapView() {
           LABEL_W={LABEL_W}
           ROW_H={ROW_H}
           sprintCount={sprints.length}
+          rowYOffsets={rowYOffsets}
+          rowHeightsArr={rowHeightsArr}
         />
       </div>
 
@@ -663,38 +941,49 @@ export default function RoadmapView() {
         if (!capacityTip) return null
         const tipSprint = sprints.find(s => s.id === capacityTip.sprintId)
         if (!tipSprint) return null
-        const sprintTasks = data.tasks.filter(t => t.sprintId === capacityTip.sprintId)
-        const tipCapacity = data.project?.sprintCapacities?.[capacityTip.sprintId] ?? 80
-        const tipBuffer   = data.project?.bufferPercent ?? 0
+        const tipBuffer = data.project?.bufferPercent ?? 0
 
-        // Group by discipline
-        const byDiscipline = {}
-        for (const t of sprintTasks) {
-          const d = t.discipline || 'Unassigned'
-          byDiscipline[d] = (byDiscipline[d] || 0) + (t.estimate || 0)
-        }
-        const disciplines = Object.entries(byDiscipline).sort((a, b) => b[1] - a[1])
-        const tipTotal = disciplines.reduce((s, [, h]) => s + h, 0)
-        const tipOver  = tipTotal > tipCapacity
+        // Per-discipline capacity info
+        const discInfo = getCapacityInfo(capacityTip.sprintId, data.team, activeTasks, sprints.length, tipBuffer)
+        const hasAnyWork = discInfo.some(d => d.used > 0)
+        const anyOver    = discInfo.some(d => d.over)
 
         return (
-          <div style={{ position: 'fixed', left: capacityTip.x, top: capacityTip.y, transform: 'translateX(-50%)', zIndex: 9999, background: 'white', border: '1px solid #c5c6bb', borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,.12)', padding: '10px 14px', minWidth: 180, pointerEvents: 'none' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#5e6058', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>{tipSprint.label}</div>
+          <div style={{ position: 'fixed', left: capacityTip.x, top: capacityTip.y, transform: 'translateX(-50%)', zIndex: 9999, background: 'white', border: `1px solid ${anyOver ? 'rgba(180,120,20,0.50)' : '#c5c6bb'}`, borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,.12)', padding: '10px 14px', minWidth: 200, pointerEvents: 'none' }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 8 }}>
+              {anyOver && (
+                <span className="material-symbols-outlined" style={{ fontSize: 14, color: '#b47814', fontVariationSettings: "'FILL' 1" }}>warning</span>
+              )}
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#5e6058', textTransform: 'uppercase', letterSpacing: '.06em' }}>{tipSprint.label}</span>
+              {anyOver && (
+                <span style={{ fontSize: 9, fontWeight: 700, color: '#b47814', background: 'rgba(180,120,20,0.12)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase', letterSpacing: '.04em' }}>Overscoped</span>
+              )}
+            </div>
 
-            {disciplines.length === 0 ? (
+            {!hasAnyWork ? (
               <div style={{ fontSize: 12, color: '#9e9f95' }}>No tasks assigned</div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                {disciplines.map(([disc, hours]) => {
-                  const pct = tipCapacity > 0 ? Math.min(100, Math.round((hours / tipCapacity) * 100)) : 0
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {discInfo.filter(d => d.used > 0 || d.capacity > 0).map(d => {
+                  const barPct = d.capacity > 0 ? Math.min(100, Math.round((d.used / d.capacity) * 100)) : 0
+                  const barColor = d.over ? '#b47814' : '#5b5f63'
                   return (
-                    <div key={disc}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 600, color: '#31332c', marginBottom: 2 }}>
-                        <span>{disc}</span>
-                        <span style={{ color: '#5e6058' }}>{hours}h</span>
+                    <div key={d.discipline}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, fontWeight: 600, marginBottom: 2 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          {d.over && (
+                            <span className="material-symbols-outlined" style={{ fontSize: 12, color: '#b47814', fontVariationSettings: "'FILL' 1" }}>warning</span>
+                          )}
+                          <span style={{ color: d.over ? '#b47814' : '#31332c' }}>{d.discipline}</span>
+                        </div>
+                        <span style={{ color: d.over ? '#b47814' : '#5e6058' }}>
+                          {Math.round(d.used)}h / {Math.round(d.capacity)}h
+                          {d.over && <span style={{ marginLeft: 3, fontSize: 10 }}>(+{d.overAmt}h)</span>}
+                        </span>
                       </div>
                       <div style={{ height: 3, borderRadius: 2, background: '#efeee6', overflow: 'hidden' }}>
-                        <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: '#5b5f63' }} />
+                        <div style={{ width: `${barPct}%`, height: '100%', borderRadius: 2, background: barColor, transition: 'width 0.2s' }} />
                       </div>
                     </div>
                   )
@@ -702,12 +991,10 @@ export default function RoadmapView() {
               </div>
             )}
 
-            <div style={{ borderTop: '1px solid #efeee6', marginTop: 8, paddingTop: 7, display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 700, color: tipOver ? '#9f403d' : '#31332c' }}>
-              <span>Total</span>
-              <span>{tipTotal}h / {tipCapacity}h</span>
-            </div>
             {tipBuffer > 0 && (
-              <div style={{ fontSize: 10, color: '#9e9f95', marginTop: 3 }}>{tipBuffer}% buffer reserved</div>
+              <div style={{ fontSize: 10, color: '#9e9f95', marginTop: 6, borderTop: '1px solid #efeee6', paddingTop: 5 }}>
+                {tipBuffer}% buffer reserved
+              </div>
             )}
           </div>
         )
@@ -831,7 +1118,7 @@ function GanttRow({
                     // Register for dep-draw hit testing
                     barRegistryRef.current.push({ id: item.id, el })
                     // Attach drag behaviour
-                    attachBarDrag(el, item, type, range, sprints, LABEL_W, ROW_H)
+                    attachBarDrag(el, item, type, range, sprints, LABEL_W, ROW_H, SPRINT_W)
                   }}
                   title={`${item.id}: ${item.summary}`}
                 >

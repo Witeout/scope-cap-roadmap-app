@@ -2,6 +2,12 @@ import { useState, useRef, useCallback } from 'react'
 import { useDataStore } from '../../store/dataStore'
 import DatePicker from '../ui/DatePicker'
 
+// ─── Release color palette ────────────────────────────────────────────────────
+const RELEASE_COLORS = [
+  '#4a6fa5', '#4a8c5c', '#8c5a4a', '#7a5b8c', '#8c7a4a',
+  '#4a7a8c', '#8c4a6f', '#5a8c4a', '#6f4a8c', '#8c6f4a',
+]
+
 // ─── Shared card shell ────────────────────────────────────────────────────────
 function Card({ title, icon, children }) {
   return (
@@ -88,7 +94,7 @@ function TimelineCard({ project, onUpdate }) {
   )
 }
 
-// ─── Card 2: Milestones ───────────────────────────────────────────────────────
+// ─── Card 2: Releases & Milestones ───────────────────────────────────────────
 function MilestoneRow({ ms, onNameChange, onDateChange, onDelete, dragHandlers }) {
   return (
     <div
@@ -110,10 +116,7 @@ function MilestoneRow({ ms, onNameChange, onDateChange, onDelete, dragHandlers }
         value={ms.date ?? ''}
         onChange={val => onDateChange(ms.id, val || null)}
       />
-      <button
-        className="flex-shrink-0"
-        onClick={() => onDelete(ms.id)}
-      >
+      <button className="flex-shrink-0" onClick={() => onDelete(ms.id)}>
         <span className="material-symbols-outlined text-base text-slate-300 hover:text-error transition-colors">
           close
         </span>
@@ -122,9 +125,15 @@ function MilestoneRow({ ms, onNameChange, onDateChange, onDelete, dragHandlers }
   )
 }
 
-function MilestonesCard({ project, onAddMilestone, onUpdateMilestone, onRemoveMilestone, onReorderMilestone }) {
+function ReleaseCard({
+  release, index,
+  onUpdateRelease, onRemoveRelease,
+  onAddMilestone, onUpdateMilestone, onRemoveMilestone, onReorderMilestone,
+}) {
+  const [editingName, setEditingName] = useState(false)
   const dragSrcRef = useRef(null)
-  const sorted = [...(project.milestones ?? [])].sort((a, b) => a.order - b.order)
+  const sorted = [...(release.milestones ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  const color = release.color || RELEASE_COLORS[index % RELEASE_COLORS.length]
 
   const makeDragHandlers = ms => ({
     onDragStart: e => {
@@ -136,40 +145,107 @@ function MilestonesCard({ project, onAddMilestone, onUpdateMilestone, onRemoveMi
       e.currentTarget.style.opacity = ''
       dragSrcRef.current = null
     },
-    onDragOver: e => {
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'move'
-    },
+    onDragOver: e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' },
     onDrop: e => {
       e.preventDefault()
       const src = dragSrcRef.current
       if (!src || src.id === ms.id) return
-      onReorderMilestone(src.id, ms.id)
+      onReorderMilestone(release.id, src.id, ms.id)
     },
   })
 
   return (
-    <Card title="Major Milestones" icon="flag">
-      <div className="flex flex-col gap-2">
-        {sorted.map(ms => (
-          <MilestoneRow
-            key={ms.id}
-            ms={ms}
-            onNameChange={onUpdateMilestone}
-            onDateChange={(id, val) => onUpdateMilestone(id, null, val)}
-            onDelete={onRemoveMilestone}
-            dragHandlers={makeDragHandlers(ms)}
-          />
-        ))}
-      </div>
-      <button
-        className="flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline mt-1 self-start"
-        onClick={onAddMilestone}
+    <div className="bg-surface-container-low rounded-xl overflow-hidden border border-outline-variant/20 shadow-sm">
+      {/* Card header — color accent + editable name */}
+      <div
+        className="flex items-center gap-2 px-4 py-3 border-b border-outline-variant/20"
+        style={{ background: color + '18' }}
       >
-        <span className="material-symbols-outlined text-base">add</span>
-        Add Milestone
-      </button>
-    </Card>
+        {/* Color swatch */}
+        <div style={{ width: 10, height: 10, borderRadius: 3, background: color, flexShrink: 0 }} />
+
+        {/* Editable release name */}
+        {editingName ? (
+          <input
+            autoFocus
+            className="flex-1 text-sm font-bold bg-transparent border-b border-outline-variant/40 outline-none min-w-0"
+            defaultValue={release.name}
+            onBlur={e => { onUpdateRelease(release.id, { name: e.target.value }); setEditingName(false) }}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur() }}
+          />
+        ) : (
+          <span
+            className="flex-1 text-sm font-bold text-on-background cursor-pointer hover:underline"
+            title="Click to rename"
+            onClick={() => setEditingName(true)}
+          >
+            {release.name || 'Untitled Release'}
+          </span>
+        )}
+
+        {/* Color picker */}
+        <label title="Release color" className="flex-shrink-0 cursor-pointer">
+          <input
+            type="color"
+            value={color}
+            className="w-0 h-0 opacity-0 absolute"
+            onChange={e => onUpdateRelease(release.id, { color: e.target.value })}
+          />
+          <span className="material-symbols-outlined text-base text-slate-400 hover:text-slate-600 transition-colors">palette</span>
+        </label>
+
+        {/* Remove release button */}
+        <button
+          className="flex-shrink-0"
+          onClick={() => { if (window.confirm(`Remove release "${release.name}"?`)) onRemoveRelease(release.id) }}
+          title="Remove release"
+        >
+          <span className="material-symbols-outlined text-base text-slate-300 hover:text-error transition-colors">delete</span>
+        </button>
+      </div>
+
+      <div className="p-4 flex flex-col gap-4">
+        {/* Date range */}
+        <div className="flex items-center gap-4">
+          <label className="text-xs font-bold text-slate-500 uppercase tracking-wide w-28 shrink-0">Start Date</label>
+          <DatePicker
+            value={release.startDate ?? ''}
+            onChange={val => onUpdateRelease(release.id, { startDate: val || null })}
+          />
+        </div>
+        <div className="flex items-center gap-4">
+          <label className="text-xs font-bold text-slate-500 uppercase tracking-wide w-28 shrink-0">End Date</label>
+          <DatePicker
+            value={release.endDate ?? ''}
+            onChange={val => onUpdateRelease(release.id, { endDate: val || null })}
+          />
+        </div>
+
+        {/* Milestones */}
+        {sorted.length > 0 && (
+          <div className="flex flex-col gap-2">
+            {sorted.map(ms => (
+              <MilestoneRow
+                key={ms.id}
+                ms={ms}
+                onNameChange={(id, name) => onUpdateMilestone(id, { name })}
+                onDateChange={(id, val) => onUpdateMilestone(id, { date: val })}
+                onDelete={onRemoveMilestone}
+                dragHandlers={makeDragHandlers(ms)}
+              />
+            ))}
+          </div>
+        )}
+
+        <button
+          className="flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline self-start"
+          onClick={() => onAddMilestone(release.id)}
+        >
+          <span className="material-symbols-outlined text-base">add</span>
+          Add Milestone
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -206,28 +282,42 @@ function BufferCard({ project, onUpdate }) {
 
 // ─── Main component ────────────────────────────────────────────────────────────
 export default function ProjectView() {
-  const { data, updateProject, updateMilestone, addMilestone, removeMilestone } = useDataStore()
+  const {
+    data, updateProject,
+    addRelease, updateRelease, removeRelease,
+    addMilestone, updateMilestone, removeMilestone,
+  } = useDataStore()
   const project = data.project
+  const releases = [...(project.releases ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
 
   // ── Project field updates ──────────────────────────────────────────────────
   const handleUpdateProject = useCallback(updates => {
     updateProject(updates)
   }, [updateProject])
 
-  // ── Milestone actions ──────────────────────────────────────────────────────
-  const handleAddMilestone = useCallback(() => {
-    addMilestone({ name: '', date: null, fixed: false })
-    // Focus the new name input after mount
-    setTimeout(() => {
-      const inputs = document.querySelectorAll('[data-milestone-row] input[type="text"]')
-      if (inputs.length) inputs[inputs.length - 1].focus()
-    }, 50)
+  // ── Release actions ────────────────────────────────────────────────────────
+  const handleAddRelease = useCallback(() => {
+    const idx = (project.releases ?? []).length
+    addRelease({
+      name: 'New Release',
+      color: RELEASE_COLORS[idx % RELEASE_COLORS.length],
+    })
+  }, [addRelease, project.releases])
+
+  const handleUpdateRelease = useCallback((id, updates) => {
+    updateRelease(id, updates)
+  }, [updateRelease])
+
+  const handleRemoveRelease = useCallback(id => {
+    removeRelease(id)
+  }, [removeRelease])
+
+  // ── Milestone actions (scoped to release) ──────────────────────────────────
+  const handleAddMilestone = useCallback(releaseId => {
+    addMilestone(releaseId, { name: '', date: null })
   }, [addMilestone])
 
-  const handleUpdateMilestone = useCallback((id, name, date) => {
-    const updates = {}
-    if (name  !== null && name  !== undefined) updates.name = name
-    if (date  !== undefined)                   updates.date = date
+  const handleUpdateMilestone = useCallback((id, updates) => {
     updateMilestone(id, updates)
   }, [updateMilestone])
 
@@ -235,15 +325,15 @@ export default function ProjectView() {
     removeMilestone(id)
   }, [removeMilestone])
 
-  const handleReorderMilestone = useCallback((srcId, tgtId) => {
-    const milestones = project.milestones ?? []
-    const src = milestones.find(m => m.id === srcId)
-    const tgt = milestones.find(m => m.id === tgtId)
+  const handleReorderMilestone = useCallback((releaseId, srcId, tgtId) => {
+    const release = (project.releases ?? []).find(r => r.id === releaseId)
+    if (!release) return
+    const src = release.milestones?.find(m => m.id === srcId)
+    const tgt = release.milestones?.find(m => m.id === tgtId)
     if (!src || !tgt) return
-    // Swap orders
     updateMilestone(srcId, { order: tgt.order })
     updateMilestone(tgtId, { order: src.order })
-  }, [project.milestones, updateMilestone])
+  }, [project.releases, updateMilestone])
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
@@ -252,13 +342,31 @@ export default function ProjectView() {
           project={project}
           onUpdate={handleUpdateProject}
         />
-        <MilestonesCard
-          project={project}
-          onAddMilestone={handleAddMilestone}
-          onUpdateMilestone={handleUpdateMilestone}
-          onRemoveMilestone={handleRemoveMilestone}
-          onReorderMilestone={handleReorderMilestone}
-        />
+
+        {/* Release cards */}
+        {releases.map((release, idx) => (
+          <ReleaseCard
+            key={release.id}
+            release={release}
+            index={idx}
+            onUpdateRelease={handleUpdateRelease}
+            onRemoveRelease={handleRemoveRelease}
+            onAddMilestone={handleAddMilestone}
+            onUpdateMilestone={handleUpdateMilestone}
+            onRemoveMilestone={handleRemoveMilestone}
+            onReorderMilestone={handleReorderMilestone}
+          />
+        ))}
+
+        {/* Add release */}
+        <button
+          className="flex items-center gap-2 text-sm font-semibold text-primary hover:underline self-start"
+          onClick={handleAddRelease}
+        >
+          <span className="material-symbols-outlined text-base">add_circle</span>
+          Add Release
+        </button>
+
         <BufferCard
           project={project}
           onUpdate={handleUpdateProject}
