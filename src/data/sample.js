@@ -17,7 +17,7 @@ export function getSampleData() {
       releases: [
         {
           id: 'REL-1',
-          name: 'Base Launch',
+          name: 'Base Game Launch',
           startDate: '2026-01-01',
           endDate: '2026-09-23',
           color: '#4a6fa5',
@@ -33,7 +33,7 @@ export function getSampleData() {
         },
         {
           id: 'REL-2',
-          name: 'Season 1 — Tactical Strike',
+          name: 'Live Service — Season 1: Tactical Strike',
           startDate: '2026-06-04',
           endDate: '2026-10-21',
           color: '#4a8c5c',
@@ -47,7 +47,7 @@ export function getSampleData() {
         },
         {
           id: 'REL-3',
-          name: 'Season 2 — Desert Storm',
+          name: 'Live Service — Season 2: Desert Storm',
           startDate: '2026-09-10',
           endDate: '2026-12-17',
           color: '#8c5a4a',
@@ -61,6 +61,8 @@ export function getSampleData() {
         },
       ],
       bufferPercent: 85, // High reserve: reflects live-service burn-rate buffer for hotfixes/unplanned work
+      regions: ['CA', 'US'],
+      customHolidays: [], // user-defined additions on top of the built-in holiday DB
     },
     team: [
       { id: 'TM-1',  name: 'Sarah Chen',   hoursPerSprint: 54, statHolidays: 20, ptoDays: 10, sickDays: 10, discipline: 'Code' },

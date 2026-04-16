@@ -82,8 +82,9 @@ export function useDepDraw(barRegistryRef) {
       for (const entry of registry) {
         if (entry.id === fromId) continue
         const r   = entry.el.getBoundingClientRect()
-        const pad = 8
-        if (tx >= r.left - pad && tx <= r.right + pad && ty >= r.top && ty <= r.bottom) {
+        const pad  = 8
+        const vpad = 8
+        if (tx >= r.left - pad && tx <= r.right + pad && ty >= r.top - vpad && ty <= r.bottom + vpad) {
           found = entry
           break
         }

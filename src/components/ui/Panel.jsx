@@ -235,7 +235,8 @@ function DepsSection({ type, id, data, scenarioId, onNavigate }) {
 }
 
 // ─── Comment list ─────────────────────────────────────────────────────────────
-function CommentItem({ comment }) {
+function CommentItem({ comment, itemId, currentAuthor }) {
+  const { removeComment, updateComment } = useDataStore()
   const bg    = avatarBg(comment.author)
   const color = avatarColor(comment.author)
   const ini   = initials(comment.author || '?')
@@ -243,22 +244,95 @@ function CommentItem({ comment }) {
     ? new Date(comment.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     : ''
 
+  const [editing, setEditing]   = useState(false)
+  const [editText, setEditText] = useState(comment.text)
+  const textareaRef             = useRef(null)
+
+  const isAuthor = currentAuthor && comment.author === currentAuthor
+
+  const handleEdit = () => {
+    setEditText(comment.text)
+    setEditing(true)
+    setTimeout(() => textareaRef.current?.focus(), 0)
+  }
+
+  const handleSaveEdit = () => {
+    const trimmed = editText.trim()
+    if (trimmed && trimmed !== comment.text) {
+      updateComment(itemId, comment.id, trimmed)
+    }
+    setEditing(false)
+  }
+
+  const handleCancelEdit = () => {
+    setEditText(comment.text)
+    setEditing(false)
+  }
+
+  const handleDelete = () => removeComment(itemId, comment.id)
+
   return (
-    <div className="flex gap-3">
+    <div className="flex gap-3 group">
       <div
         className="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-[10px] font-bold"
         style={{ background: bg, color }}
       >
         {ini}
       </div>
-      <div className="flex-1">
-        <div className="flex items-baseline gap-2 mb-1">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1 flex-wrap">
           <span className="text-xs font-bold text-on-background">{comment.author}</span>
           {date && <span className="text-[10px] text-slate-400">{date}</span>}
+          {isAuthor && !editing && (
+            <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-auto">
+              <button
+                title="Edit comment"
+                className="p-0.5 rounded text-slate-400 hover:text-primary transition-colors"
+                onClick={handleEdit}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 13 }}>edit</span>
+              </button>
+              <button
+                title="Delete comment"
+                className="p-0.5 rounded text-slate-400 hover:text-red-400 transition-colors"
+                onClick={handleDelete}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 13 }}>delete</span>
+              </button>
+            </span>
+          )}
         </div>
-        <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded-lg leading-relaxed border border-slate-100">
-          {comment.text}
-        </p>
+
+        {editing ? (
+          <div>
+            <textarea
+              ref={textareaRef}
+              value={editText}
+              rows={2}
+              className="w-full text-xs border border-primary/40 rounded-lg p-2 focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none resize-none"
+              onChange={e => setEditText(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSaveEdit() }
+                if (e.key === 'Escape') handleCancelEdit()
+              }}
+            />
+            <div className="flex gap-1.5 justify-end mt-1">
+              <button
+                className="text-[11px] px-2 py-1 rounded-lg border border-outline-variant/40 text-slate-500 hover:bg-surface-container transition-colors"
+                onClick={handleCancelEdit}
+              >Cancel</button>
+              <button
+                className="text-[11px] font-bold bg-primary text-on-primary px-2 py-1 rounded-lg hover:bg-primary-dim transition-colors disabled:opacity-40"
+                disabled={!editText.trim()}
+                onClick={handleSaveEdit}
+              >Save</button>
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded-lg leading-relaxed border border-slate-100">
+            {comment.text}
+          </p>
+        )}
       </div>
     </div>
   )
@@ -293,7 +367,7 @@ function ActivitySection({ itemId, data }) {
 
       <div className="space-y-4 mb-4 mt-2">
         {comments.length
-          ? comments.map(c => <CommentItem key={c.id} comment={c} />)
+          ? comments.map(c => <CommentItem key={c.id} comment={c} itemId={itemId} currentAuthor={author} />)
           : <p className="text-xs text-slate-400 italic">No comments yet.</p>
         }
       </div>
@@ -374,13 +448,19 @@ export default function Panel() {
 
   const { open, type, id } = panel
 
-  // Resolve item from store
+  // Resolve item from store (scenario-private tasks live in scn.tasks, not data.tasks)
+  const scnTasks = scenarioId
+    ? (data.scenarios.find(s => s.id === scenarioId)?.tasks ?? [])
+    : []
+
   const item = open && type && id
     ? (type === 'initiative' ? data.initiatives.find(x => x.id === id)
      : type === 'epic'       ? data.epics.find(x => x.id === id)
-     : type === 'task'       ? data.tasks.find(x => x.id === id)
+     : type === 'task'       ? (data.tasks.find(x => x.id === id) ?? scnTasks.find(x => x.id === id))
      : null)
     : null
+
+  const isScnPrivate = type === 'task' && !!scenarioId && !data.tasks.find(x => x.id === id)
 
   // Local field state — mirrors stored item, saves on blur/change
   const [fields, setFields] = useState({
@@ -394,6 +474,7 @@ export default function Panel() {
     epicId:      '',
     initiativeId: '',
     status:      '',
+    teamId:      '',
   })
 
   // Sync local state when panel opens a new item
@@ -410,6 +491,7 @@ export default function Panel() {
       epicId:       item.epicId       ?? '',
       initiativeId: item.initiativeId ?? '',
       status:       item.status       ?? '',
+      teamId:       item.teamId       ?? '',
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, type]) // intentional: sync only on item navigation, not on every live edit
@@ -421,7 +503,7 @@ export default function Panel() {
 
   // ── Save helpers ─────────────────────────────────────────────────────────
   const save = (field, value) => {
-    updateItem(type, id, { [field]: value })
+    updateItem(type, id, { [field]: value }, isScnPrivate ? scenarioId : null)
   }
 
   const handleBlur = (field, transform) => e => {
@@ -447,7 +529,7 @@ export default function Panel() {
       const scn = data.scenarios.find(s => s.id === scenarioId)
       const isScnPrivate = scn && !data.tasks.find(x => x.id === id)
       if (isScnPrivate) {
-        updateItem('task', id, { sprintId: newSpId })
+        updateItem('task', id, { sprintId: newSpId }, scenarioId)
       } else {
         updateScenarioSprintOverride(scenarioId, id, newSpId)
       }
@@ -556,6 +638,21 @@ export default function Panel() {
                 onChange={handleSelectChange('priority')}
               >
                 {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+
+            {/* Team */}
+            <div>
+              <FieldLabel>Team</FieldLabel>
+              <select
+                value={fields.teamId}
+                className="w-full text-sm font-semibold bg-slate-50 border-none rounded-lg py-2 px-2 focus:ring-2 focus:ring-primary/20 focus:outline-none cursor-pointer"
+                onChange={handleSelectChange('teamId', v => v || null)}
+              >
+                <option value="">— No Team —</option>
+                {(data.teamGroups ?? []).map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
               </select>
             </div>
 
@@ -721,7 +818,7 @@ export default function Panel() {
         <div className="flex-shrink-0 px-5 py-4 border-t border-slate-100">
           <button
             className="flex items-center gap-2 text-sm font-semibold text-error hover:bg-error/10 px-3 py-2 rounded-xl transition-all border border-error/20 w-full justify-center"
-            onClick={() => { closePanel(); setPendingDelete({ type, id }) }}
+            onClick={() => { closePanel(); setPendingDelete({ type, id, scenarioId: isScnPrivate ? scenarioId : null }) }}
           >
             <span className="material-symbols-outlined text-lg">delete</span>
             Delete {typeLabel}

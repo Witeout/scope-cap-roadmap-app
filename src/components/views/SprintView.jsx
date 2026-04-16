@@ -141,7 +141,7 @@ export default function SprintView() {
   // ── Broken dependency detection ────────────────────────────────────────────
   const { violatedIds: depViolatedIds, tooltipMap: depTooltipMap } = useMemo(
     () => getBrokenDependencies(data.dependencies, sprints, data, null),
-    [data.dependencies, sprints, data]
+    [sprints, data]
   )
 
   const sorted = arr => [...arr].sort((a, b) => a.order - b.order)

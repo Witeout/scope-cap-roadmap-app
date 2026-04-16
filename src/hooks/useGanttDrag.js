@@ -110,7 +110,7 @@ export function useGanttDrag() {
         ghost.textContent  = item.summary
         document.body.appendChild(ghost)
 
-        startX = mv.clientX
+        startX = barRect.left   // viewport left of bar at drag start
         onDragMove(mv)
 
         document.addEventListener('mousemove', onDragMove)
@@ -126,15 +126,10 @@ export function useGanttDrag() {
         const newStartIdx = Math.max(0, Math.min(sprints.length - 1, range.startIndex + delta))
         const span        = range.endIndex - range.startIndex
         const newEndIdx   = Math.min(sprints.length - 1, newStartIdx + span)
-        const newLeft     = LABEL_W + newStartIdx * SPRINT_W + 10
-
-        // Update ghost horizontal position only (stay on same row)
-        const barRect = bar.getBoundingClientRect()
+        // Update ghost — position is viewport-relative (ghost is position:fixed)
         ghost.style.width = ((newEndIdx - newStartIdx + 1) * SPRINT_W - 20) + 'px'
-        ghost.style.left  = (newLeft + (mv.clientX - startMX - delta * SPRINT_W)) + 'px'
-        // Simpler: snap ghost to column
-        ghost.style.left  = (newLeft) + 'px'
-        ghost.style.top   = barRect.top + 'px'
+        ghost.style.left  = (startX + delta * SPRINT_W) + 'px'
+        ghost.style.top   = bar.getBoundingClientRect().top + 'px'
 
         // Highlight the target column header
         document.querySelectorAll('.gantt-sprint-header').forEach((th, i) => {

@@ -117,4 +117,15 @@ export const useUIStore = create(set => ({
   releaseFilter: null,
   setReleaseFilter: releaseFilter => set({ releaseFilter }),
   clearReleaseFilter: () => set({ releaseFilter: null }),
+
+  // ── In-app dialog (replaces window.alert / confirm / prompt) ─────────────
+  // type: 'alert' | 'confirm' | 'prompt'
+  // title: string
+  // message: string
+  // defaultValue: string (prompt only)
+  // onConfirm: (value?) => void
+  // onCancel: () => void (confirm/prompt only)
+  dialog: null,
+  openDialog: config => set({ dialog: config }),
+  closeDialog: () => set({ dialog: null }),
 }))

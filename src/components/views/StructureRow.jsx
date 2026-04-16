@@ -106,6 +106,11 @@ export default function StructureRow({
       onDrop={onDrop}
       onDragEnd={onDragEnd}
     >
+      {/* Drag handle */}
+      <span className="material-symbols-outlined text-base text-slate-300 opacity-0 group-hover:opacity-100 cursor-grab flex-shrink-0 transition-opacity">
+        drag_indicator
+      </span>
+
       {/* Checkbox (tasks only) */}
       {type === 'task' && (
         <input
@@ -120,11 +125,6 @@ export default function StructureRow({
           onChange={() => {}}
         />
       )}
-
-      {/* Drag handle */}
-      <span className="material-symbols-outlined text-base text-slate-300 opacity-0 group-hover:opacity-100 cursor-grab flex-shrink-0 transition-opacity">
-        drag_indicator
-      </span>
 
       {/* Left section: collapse + icon + id + summary */}
       <div

@@ -9,35 +9,40 @@ function matchSearch(item, q) {
   return !q || (item.summary || '').toLowerCase().includes(q)
 }
 
-function shouldShowTask(task, filters) {
-  const tf = filters.type
-  if (tf === 'initiative' || tf === 'epic') return false
-  return matchSearch(task, filters.search.trim().toLowerCase())
+function matchTeamFilter(item, teamGroupFilter) {
+  if (!teamGroupFilter) return true
+  return item.teamId === teamGroupFilter
 }
 
-function shouldShowEpic(epic, tasks, filters) {
+function shouldShowTask(task, filters, teamGroupFilter) {
+  const tf = filters.type
+  if (tf === 'initiative' || tf === 'epic') return false
+  return matchSearch(task, filters.search.trim().toLowerCase()) && matchTeamFilter(task, teamGroupFilter)
+}
+
+function shouldShowEpic(epic, tasks, filters, teamGroupFilter) {
   const tf = filters.type
   const q  = filters.search.trim().toLowerCase()
   if (tf === 'initiative') return false
-  if (matchSearch(epic, q) && tf !== 'task') return true
+  if (matchSearch(epic, q) && tf !== 'task' && matchTeamFilter(epic, teamGroupFilter)) return true
   if (tf === 'task' || tf === 'all')
-    return tasks.filter(t => t.epicId === epic.id).some(t => shouldShowTask(t, filters))
+    return tasks.filter(t => t.epicId === epic.id).some(t => shouldShowTask(t, filters, teamGroupFilter))
   return false
 }
 
-function shouldShowInitiative(ini, epics, tasks, filters) {
+function shouldShowInitiative(ini, epics, tasks, filters, teamGroupFilter) {
   const tf = filters.type
   const q  = filters.search.trim().toLowerCase()
   if (tf === 'task')
     return epics
       .filter(e => e.initiativeId === ini.id)
-      .some(e => tasks.filter(t => t.epicId === e.id).some(t => shouldShowTask(t, filters)))
+      .some(e => tasks.filter(t => t.epicId === e.id).some(t => shouldShowTask(t, filters, teamGroupFilter)))
   if (tf === 'epic')
-    return epics.filter(e => e.initiativeId === ini.id).some(e => matchSearch(e, q))
-  if (matchSearch(ini, q) && tf !== 'task') return true
+    return epics.filter(e => e.initiativeId === ini.id).some(e => matchSearch(e, q) && matchTeamFilter(e, teamGroupFilter))
+  if (matchSearch(ini, q) && tf !== 'task' && matchTeamFilter(ini, teamGroupFilter)) return true
   return epics
     .filter(e => e.initiativeId === ini.id)
-    .some(e => shouldShowEpic(e, tasks, filters))
+    .some(e => shouldShowEpic(e, tasks, filters, teamGroupFilter))
 }
 
 // ─── Delete confirmation modal ─────────────────────────────────────────────────
@@ -82,6 +87,7 @@ export default function StructureView() {
     contextMenu, openContextMenu, closeContextMenu,
     setAllCollapsed,
     selectedIds, lastSelectedId, toggleSelected, clearSelection, setSelection,
+    teamGroupFilter, setTeamGroupFilter,
   } = useUIStore()
 
   // 3-state collapse check: explicit false overrides allCollapsed; otherwise follow flag or map
@@ -105,17 +111,17 @@ export default function StructureView() {
     const result = []
 
     for (const ini of sortedInitiatives) {
-      if (!shouldShowInitiative(ini, sortedEpics, sortedTasks, filters)) continue
+      if (!shouldShowInitiative(ini, sortedEpics, sortedTasks, filters, teamGroupFilter)) continue
       result.push({ item: ini, type: 'initiative', indent: 0 })
       if (isItemCollapsed(ini.id)) continue
 
       for (const epic of sortedEpics.filter(e => e.initiativeId === ini.id)) {
-        if (!shouldShowEpic(epic, sortedTasks, filters)) continue
+        if (!shouldShowEpic(epic, sortedTasks, filters, teamGroupFilter)) continue
         result.push({ item: epic, type: 'epic', indent: 1 })
         if (isItemCollapsed(epic.id)) continue
 
         for (const task of sortedTasks.filter(t => t.epicId === epic.id)) {
-          if (!shouldShowTask(task, filters)) continue
+          if (!shouldShowTask(task, filters, teamGroupFilter)) continue
           result.push({ item: task, type: 'task', indent: 2 })
         }
       }
@@ -124,7 +130,7 @@ export default function StructureView() {
     // Orphan epics (no parent initiative)
     const orphanEpics = sortedEpics
       .filter(e => !e.initiativeId || !data.initiatives.find(i => i.id === e.initiativeId))
-      .filter(e => shouldShowEpic(e, sortedTasks, filters))
+      .filter(e => shouldShowEpic(e, sortedTasks, filters, teamGroupFilter))
 
     if (orphanEpics.length) {
       result.push({ type: 'sep', label: 'Epics without Initiative' })
@@ -132,7 +138,7 @@ export default function StructureView() {
         result.push({ item: epic, type: 'epic', indent: 0 })
         if (!isItemCollapsed(epic.id)) {
           for (const task of sortedTasks.filter(t => t.epicId === epic.id)) {
-            if (!shouldShowTask(task, filters)) continue
+            if (!shouldShowTask(task, filters, teamGroupFilter)) continue
             result.push({ item: task, type: 'task', indent: 1 })
           }
         }
@@ -142,7 +148,7 @@ export default function StructureView() {
     // Orphan tasks (no parent epic)
     const orphanTasks = sortedTasks
       .filter(t => !t.epicId || !data.epics.find(e => e.id === t.epicId))
-      .filter(t => shouldShowTask(t, filters))
+      .filter(t => shouldShowTask(t, filters, teamGroupFilter))
 
     if (orphanTasks.length) {
       result.push({ type: 'sep', label: 'Tasks without Epic' })
@@ -152,7 +158,7 @@ export default function StructureView() {
     }
 
     return result
-  }, [sortedInitiatives, sortedEpics, sortedTasks, filters, isItemCollapsed, data.initiatives, data.epics])
+  }, [sortedInitiatives, sortedEpics, sortedTasks, filters, isItemCollapsed, data.initiatives, data.epics, teamGroupFilter])
 
   const issueCount = rows.filter(r => r.type !== 'sep').length
 
@@ -296,6 +302,30 @@ export default function StructureView() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <>
+      {/* Toolbar with team filter */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderBottom: '1px solid #c5c6bb', background: '#fbf9f4' }}>
+        <select
+          value={teamGroupFilter ?? ''}
+          onChange={e => setTeamGroupFilter(e.target.value || null)}
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            padding: '6px 10px',
+            border: '1px solid #d1cfc4',
+            borderRadius: 6,
+            background: '#fbf9f4',
+            cursor: 'pointer',
+            color: '#31332c',
+          }}
+          title="Filter by team"
+        >
+          <option value="">All Teams</option>
+          {(data.teamGroups ?? []).map(g => (
+            <option key={g.id} value={g.id}>{g.name}</option>
+          ))}
+        </select>
+      </div>
+
       <div
         id="backlog-list"
         className="flex-1 overflow-y-auto"

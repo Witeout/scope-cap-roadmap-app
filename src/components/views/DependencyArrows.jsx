@@ -64,11 +64,13 @@ export default function DependencyArrows({
     const bY    = ROW_H + bYOff + bRowH / 2
     const dY    = ROW_H + dYOff + dRowH / 2
 
+    // Stop the path 10px before the bar edge so the arrowhead tip (not the stroke) lands at the bar
+    const dEnd = dStartX - 10
     let d
     if (dStartX > bEndX + 10) {
       // Forward: straight-ish cubic
-      const cx = Math.max(40, (dStartX - bEndX) * 0.45)
-      d = `M${bEndX},${bY} C${bEndX + cx},${bY} ${dStartX - cx},${dY} ${dStartX},${dY}`
+      const cx = Math.max(40, (dEnd - bEndX) * 0.45)
+      d = `M${bEndX},${bY} C${bEndX + cx},${bY} ${dEnd - cx},${dY} ${dEnd},${dY}`
     } else {
       // Backward / same-column: route around rows
       const exitX   = bEndX + 36
@@ -76,7 +78,7 @@ export default function DependencyArrows({
       const entryX  = dStartX - 20
       d = `M${bEndX},${bY}` +
           ` C${exitX},${bY} ${exitX},${bypassY} ${(exitX + entryX) / 2},${bypassY}` +
-          ` C${entryX},${bypassY} ${entryX},${dY} ${dStartX},${dY}`
+          ` C${entryX},${bypassY} ${entryX},${dY} ${dEnd},${dY}`
     }
 
     const isSel   = selectedDepId === dep.id
@@ -146,23 +148,23 @@ export default function DependencyArrows({
     >
       <defs dangerouslySetInnerHTML={{ __html: `
         <marker id="dep-arrow" markerWidth="10" markerHeight="10"
-                refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+                refX="0" refY="5" orient="auto" markerUnits="userSpaceOnUse">
           <path d="M0,1 L10,5 L0,9 Z" fill="rgba(91,95,99,0.8)"/>
         </marker>
         <marker id="dep-arrow-hover" markerWidth="10" markerHeight="10"
-                refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+                refX="0" refY="5" orient="auto" markerUnits="userSpaceOnUse">
           <path d="M0,1 L10,5 L0,9 Z" fill="#5b5f63"/>
         </marker>
         <marker id="dep-arrow-sel" markerWidth="10" markerHeight="10"
-                refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+                refX="0" refY="5" orient="auto" markerUnits="userSpaceOnUse">
           <path d="M0,1 L10,5 L0,9 Z" fill="#9f403d"/>
         </marker>
         <marker id="dep-arrow-viol" markerWidth="10" markerHeight="10"
-                refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+                refX="0" refY="5" orient="auto" markerUnits="userSpaceOnUse">
           <path d="M0,1 L10,5 L0,9 Z" fill="#b53832"/>
         </marker>
         <marker id="dep-arrow-viol-hover" markerWidth="10" markerHeight="10"
-                refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+                refX="0" refY="5" orient="auto" markerUnits="userSpaceOnUse">
           <path d="M0,1 L10,5 L0,9 Z" fill="#9f3330"/>
         </marker>
       ` }} />

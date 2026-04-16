@@ -3,9 +3,44 @@ import { getSampleData } from '../data/sample'
 import { computeSprints } from '../lib/sprints'
 import { buildScenario, applyScenarioCommit } from '../lib/scenarios'
 
-const STORAGE_KEY = 'scopeCapData_v3'
+// ─── Storage keys ──────────────────────────────────────────────────────────────
+const META_KEY       = 'scopeCapMeta_v1'
+const LEGACY_KEY     = 'scopeCapData_v3'
+const projectDataKey = id => `scopeCapProject_v1_${id}`
 
-// ─── Migration helper ────────────────────────────────────────────────────────
+// ─── Blank project factory ─────────────────────────────────────────────────────
+function createBlankData(name, startDate) {
+  const sd = startDate || new Date().toISOString().slice(0, 10)
+  return {
+    tasks: [], epics: [], initiatives: [], team: [],
+    scenarios: [], dependencies: [], comments: {}, summaryNotes: {}, teamGroups: [],
+    counters: {
+      initiative: 0, epic: 0, task: 0, member: 0,
+      scenario: 0, teamGroup: 0, release: 1, milestone: 1,
+    },
+    project: {
+      name,
+      startDate: sd,
+      endDate: null,
+      ongoing: true,
+      releases: [{
+        id: 'REL-1',
+        name: 'Major Milestones',
+        startDate: sd,
+        endDate: null,
+        color: '#4a6fa5',
+        order: 0,
+        milestones: [{ id: 'MS-1', name: '', date: null, fixed: false, order: 0 }],
+      }],
+      bufferPercent: 0,
+      regions: [],
+      customHolidays: [],
+      sprintCapacities: {},
+    },
+  }
+}
+
+// ─── Migration helper ──────────────────────────────────────────────────────────
 function migrate(data) {
   if (!data.comments) data.comments = {}
   if (!data.dependencies) data.dependencies = []
@@ -77,6 +112,7 @@ function migrate(data) {
   // Ensure project settings
   if (!data.project) {
     data.project = {
+      name: 'My Project',
       startDate: '2026-01-01',
       endDate: null,
       ongoing: true,
@@ -85,8 +121,10 @@ function migrate(data) {
     }
   }
 
+  // Migrate project name
+  if (!data.project.name) data.project.name = 'My Project'
+
   // ── Migrate flat milestones → first release ──────────────────────────────
-  // If releases don't exist yet but legacy milestones do, wrap them in a release
   if (!data.project.releases) {
     const legacyMilestones = data.project.milestones ?? []
     data.project.releases = legacyMilestones.length > 0
@@ -111,45 +149,110 @@ function migrate(data) {
   // Ensure each release has a milestones array
   data.project.releases.forEach(r => { if (!r.milestones) r.milestones = [] })
 
-  // Keep legacy milestone counter as a fallback seed for new milestones
   if (!data.counters.milestone) data.counters.milestone = 0
   if (!data.project.sprintCapacities) data.project.sprintCapacities = {}
+  if (!data.project.regions) data.project.regions = []
+  if (!data.project.customHolidays) {
+    data.project.customHolidays = data.project.holidays ?? []
+    delete data.project.holidays
+  }
 
   return data
 }
 
-// ─── Persistence ─────────────────────────────────────────────────────────────
-function persist(data) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)) } catch (_) {}
+// ─── Persistence helpers ───────────────────────────────────────────────────────
+function loadMeta() {
+  try {
+    const raw = localStorage.getItem(META_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch {}
+  return null
 }
 
-function loadFromStorage() {
+function saveMeta(meta) {
+  try { localStorage.setItem(META_KEY, JSON.stringify(meta)) } catch {}
+}
+
+function persistProjectData(projectId, data) {
+  try { localStorage.setItem(projectDataKey(projectId), JSON.stringify(data)) } catch {}
+}
+
+function loadProjectData(projectId) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(projectDataKey(projectId))
     if (raw) {
       const parsed = JSON.parse(raw)
-      const migrated = migrate(parsed)
-      persist(migrated)
-      return migrated
+      return migrate(parsed)
     }
-  } catch (_) {}
-  const sample = getSampleData()
-  persist(sample)
-  return sample
+  } catch {}
+  return null
+}
+
+// ─── Storage initialization ────────────────────────────────────────────────────
+// Handles first-run migration from legacy single-project storage.
+function initStorage() {
+  let meta = loadMeta()
+
+  if (!meta) {
+    // First run — migrate legacy data or start fresh from sample
+    const firstId = 'proj-1'
+    let firstData
+
+    const legacyRaw = localStorage.getItem(LEGACY_KEY)
+    if (legacyRaw) {
+      try {
+        const parsed = JSON.parse(legacyRaw)
+        firstData = migrate(parsed)
+      } catch {
+        firstData = createBlankData('My Project', '2026-01-01')
+      }
+    } else {
+      firstData = getSampleData()
+      migrate(firstData)
+      if (!firstData.project.name) firstData.project.name = 'My Project'
+    }
+
+    persistProjectData(firstId, firstData)
+    meta = {
+      activeProjectId: firstId,
+      nextProjectId: 2,
+      projects: [{ id: firstId, name: firstData.project?.name || 'My Project', createdAt: Date.now() }],
+    }
+    saveMeta(meta)
+    return { meta, data: firstData }
+  }
+
+  // Load active project data
+  let data = loadProjectData(meta.activeProjectId)
+  if (!data) {
+    // Active project missing — fall back to first available
+    const fallback = meta.projects[0]
+    if (fallback && fallback.id !== meta.activeProjectId) {
+      data = loadProjectData(fallback.id) ?? createBlankData(fallback.name, '2026-01-01')
+      meta = { ...meta, activeProjectId: fallback.id }
+      saveMeta(meta)
+    } else {
+      data = createBlankData('My Project', '2026-01-01')
+    }
+  }
+
+  return { meta, data }
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 export const useDataStore = create((set, get) => {
-  const initialData = loadFromStorage()
+  const { meta: initialMeta, data: initialData } = initStorage()
 
   return {
     // ── State ──────────────────────────────────────────────────────────────
+    meta: initialMeta,
     data: initialData,
     sprints: computeSprints(initialData.project),
 
     // ── Internal helpers ───────────────────────────────────────────────────
     _save(data) {
-      persist(data)
+      const { meta } = get()
+      persistProjectData(meta.activeProjectId, data)
       set({ data, sprints: computeSprints(data.project) })
     },
 
@@ -165,18 +268,60 @@ export const useDataStore = create((set, get) => {
 
     // ── Load / reload ──────────────────────────────────────────────────────
     loadData() {
-      const data = loadFromStorage()
-      set({ data, sprints: computeSprints(data.project) })
+      const { meta } = get()
+      const data = loadProjectData(meta.activeProjectId)
+      if (data) set({ data, sprints: computeSprints(data.project) })
     },
 
     reloadFromSample() {
       const data = getSampleData()
+      migrate(data)
       get()._save(data)
+    },
+
+    // ── Multi-project ──────────────────────────────────────────────────────
+    createProject(name, startDate) {
+      const meta = get().meta
+      const id = `proj-${meta.nextProjectId}`
+      const data = createBlankData(name, startDate)
+      persistProjectData(id, data)
+
+      const newMeta = {
+        ...meta,
+        activeProjectId: id,
+        nextProjectId: meta.nextProjectId + 1,
+        projects: [...meta.projects, { id, name, createdAt: Date.now() }],
+      }
+      saveMeta(newMeta)
+      set({ meta: newMeta, data, sprints: computeSprints(data.project) })
+      return id
+    },
+
+    switchProject(id) {
+      if (id === get().meta.activeProjectId) return
+      const data = loadProjectData(id)
+      if (!data) return
+
+      const newMeta = { ...get().meta, activeProjectId: id }
+      saveMeta(newMeta)
+      set({ meta: newMeta, data, sprints: computeSprints(data.project) })
     },
 
     // ── Project ────────────────────────────────────────────────────────────
     updateProject(updates) {
       const data = { ...get().data, project: { ...get().data.project, ...updates } }
+      // Keep meta project name in sync when name changes
+      if (updates.name !== undefined) {
+        const meta = get().meta
+        const newMeta = {
+          ...meta,
+          projects: meta.projects.map(p =>
+            p.id === meta.activeProjectId ? { ...p, name: updates.name } : p
+          ),
+        }
+        saveMeta(newMeta)
+        set({ meta: newMeta })
+      }
       get()._save(data)
     },
 
@@ -202,7 +347,6 @@ export const useDataStore = create((set, get) => {
       if (!coll) return null
       const maxOrder = coll.length ? Math.max(...coll.map(i => i.order ?? 0)) + 1 : 0
 
-      // Add teamId to tasks, epics, initiatives
       let item = { id, order: maxOrder, ...fields }
       if (type === 'task' || type === 'epic' || type === 'initiative') {
         item.teamId = fields.teamId ?? null
@@ -243,7 +387,6 @@ export const useDataStore = create((set, get) => {
         if (scn) scn.tasks = (scn.tasks || []).filter(t => t.id !== id)
       }
 
-      // Cascade: epic deleted → null out task epicIds
       if (type === 'epic') {
         data.tasks.forEach(t => { if (t.epicId === id) t.epicId = null })
         if (scenarioId) {
@@ -252,12 +395,10 @@ export const useDataStore = create((set, get) => {
         }
       }
 
-      // Cascade: initiative deleted → null out epic initiativeIds
       if (type === 'initiative') {
         data.epics.forEach(e => { if (e.initiativeId === id) e.initiativeId = null })
       }
 
-      // Cascade: remove any base deps involving this item
       data.dependencies = data.dependencies.filter(d => d.fromId !== id && d.toId !== id)
       if (scenarioId) {
         const scn = data.scenarios.find(s => s.id === scenarioId)
@@ -281,6 +422,15 @@ export const useDataStore = create((set, get) => {
       const data = structuredClone(get().data)
       if (data.comments[taskId]) {
         data.comments[taskId] = data.comments[taskId].filter(c => c.id !== commentId)
+      }
+      get()._save(data)
+    },
+
+    updateComment(taskId, commentId, text) {
+      const data = structuredClone(get().data)
+      if (data.comments[taskId]) {
+        const c = data.comments[taskId].find(c => c.id === commentId)
+        if (c) { c.text = text; c.editedAt = Date.now() }
       }
       get()._save(data)
     },
@@ -345,8 +495,6 @@ export const useDataStore = create((set, get) => {
 
     // ── Reorder (drag-and-drop within same type) ───────────────────────────
     reorderItems(type, dragId, targetId, position) {
-      // position: 'before' | 'after' | 'inside'
-      // 'inside' = reparent (task→epic or epic→initiative)
       const data = structuredClone(get().data)
       const keyMap = { initiative: 'initiatives', epic: 'epics', task: 'tasks' }
       const coll = data[keyMap[type]]
@@ -357,17 +505,14 @@ export const useDataStore = create((set, get) => {
       if (!drag || !target) return
 
       if (position === 'inside') {
-        // Reparent: task → epic, epic → initiative
         if (type === 'task')  drag.epicId        = targetId
         if (type === 'epic')  drag.initiativeId  = targetId
-        // Re-order at end of new parent's children
         const parentField = type === 'task' ? 'epicId' : 'initiativeId'
         const siblings = coll
           .filter(i => i[parentField] === drag[parentField])
           .sort((a, b) => a.order - b.order)
         siblings.forEach((item, i) => { item.order = i })
       } else {
-        // Same-type reorder — adopt the target's parent
         if (type === 'task')  drag.epicId        = target.epicId
         if (type === 'epic')  drag.initiativeId  = target.initiativeId
 
@@ -423,7 +568,6 @@ export const useDataStore = create((set, get) => {
     removeTeamGroup(id) {
       const data = structuredClone(get().data)
       data.teamGroups = data.teamGroups.filter(g => g.id !== id)
-      // Null out teamId on any items referencing this group
       data.tasks.forEach(t => { if (t.teamId === id) t.teamId = null })
       data.epics.forEach(e => { if (e.teamId === id) e.teamId = null })
       data.initiatives.forEach(i => { if (i.teamId === id) i.teamId = null })
@@ -496,15 +640,32 @@ export const useDataStore = create((set, get) => {
     removeRelease(id) {
       const data = structuredClone(get().data)
       data.project.releases = data.project.releases.filter(r => r.id !== id)
-      // Null out releaseId on items referencing this release
       data.initiatives.forEach(i => { if (i.releaseId === id) i.releaseId = null })
       data.epics.forEach(e => { if (e.releaseId === id) e.releaseId = null })
       data.tasks.forEach(t => { if (t.releaseId === id) t.releaseId = null })
       get()._save(data)
     },
 
+    // ── Holidays & Regions ─────────────────────────────────────────────────
+    updateRegions(regions) {
+      get().updateProject({ regions })
+    },
+
+    addHoliday(fields) {
+      const data = structuredClone(get().data)
+      const holiday = { id: `hol-${Date.now()}`, name: '', startDate: null, endDate: null, region: 'Global', source: 'custom', ...fields }
+      data.project.customHolidays = [...(data.project.customHolidays || []), holiday]
+      get()._save(data)
+      return holiday
+    },
+
+    removeHoliday(id) {
+      const data = structuredClone(get().data)
+      data.project.customHolidays = (data.project.customHolidays || []).filter(h => h.id !== id)
+      get()._save(data)
+    },
+
     // ── Milestones (scoped to a release) ──────────────────────────────────
-    // Find a milestone by ID across all releases
     _findMilestone(data, id) {
       for (const r of data.project.releases) {
         const ms = r.milestones?.find(m => m.id === id)

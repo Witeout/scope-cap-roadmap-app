@@ -8,6 +8,7 @@ import TeamView      from './components/views/TeamView'
 import ProjectView   from './components/views/ProjectView'
 import SummaryView   from './components/views/SummaryView'
 import Panel         from './components/ui/Panel'
+import Dialog        from './components/ui/Dialog'
 
 const NAV_ITEMS = [
   { id: 'project',  label: 'Project',   icon: 'folder_open'    },
@@ -25,9 +26,10 @@ export default function App() {
     allCollapsed, setAllCollapsed,
     hidePastSprints, setHidePastSprints,
     scenarioId, setScenarioId, clearScenario,
+    openDialog,
   } = useUIStore()
 
-  const { data } = useDataStore()
+  const { data, deleteScenario } = useDataStore()
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem('sidebarCollapsed') === 'true' } catch { return false }
@@ -44,6 +46,29 @@ export default function App() {
   const isStructure = view === 'backlog'
   const isSprint    = view === 'sprints'
   const isRoadmap   = view === 'roadmap'
+
+  const handleDeleteScenario = (scn) => {
+    openDialog({
+      type: 'confirm',
+      title: `Delete "${scn.name}"?`,
+      message: 'Are you sure you want to delete this scenario? This cannot be undone.',
+      onConfirm: () => {
+        // If we're currently viewing this scenario, navigate away first
+        if (scenarioId === scn.id) {
+          const remaining = data.scenarios.filter(s => s.id !== scn.id)
+          if (remaining.length > 0) {
+            const idx = data.scenarios.findIndex(s => s.id === scn.id)
+            const next = remaining[idx] ?? remaining[idx - 1] ?? remaining[0]
+            setScenarioId(next.id)
+          } else {
+            clearScenario()
+          }
+          setView('roadmap')
+        }
+        deleteScenario(scn.id)
+      },
+    })
+  }
 
   const hasTopBar = isStructure || isSprint
 
@@ -118,21 +143,33 @@ export default function App() {
                       <span className="truncate">Main Roadmap</span>
                     </button>
                     {data.scenarios.map(scn => (
-                      <button
+                      <div
                         key={scn.id}
-                        className={`w-full flex items-center gap-1.5 pl-7 pr-3 py-1.5 text-left rounded-lg mx-1 transition-colors ${
-                          isRoadmap && scenarioId === scn.id
-                            ? 'text-primary font-bold'
-                            : 'text-slate-500 hover:bg-surface-container'
-                        }`}
-                        style={{ width: 'calc(100% - 8px)', fontSize: 12 }}
-                        onClick={() => { setScenarioId(scn.id); setView('roadmap') }}
+                        className="group relative mx-1"
+                        style={{ width: 'calc(100% - 8px)' }}
                       >
-                        <span className="material-symbols-outlined flex-shrink-0" style={{ fontSize: 13 }}>
-                          fork_right
-                        </span>
-                        <span className="truncate">{scn.name}</span>
-                      </button>
+                        <button
+                          className={`w-full flex items-center gap-1.5 pl-7 pr-7 py-1.5 text-left rounded-lg transition-colors ${
+                            isRoadmap && scenarioId === scn.id
+                              ? 'text-primary font-bold'
+                              : 'text-slate-500 hover:bg-surface-container'
+                          }`}
+                          style={{ fontSize: 12 }}
+                          onClick={() => { setScenarioId(scn.id); setView('roadmap') }}
+                        >
+                          <span className="material-symbols-outlined flex-shrink-0" style={{ fontSize: 13 }}>
+                            fork_right
+                          </span>
+                          <span className="truncate">{scn.name}</span>
+                        </button>
+                        <button
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-slate-500 hover:text-red-400 rounded p-0.5"
+                          title={`Delete "${scn.name}"`}
+                          onClick={e => { e.stopPropagation(); handleDeleteScenario(scn) }}
+                        >
+                          <span className="material-symbols-outlined" style={{ fontSize: 13 }}>delete</span>
+                        </button>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -209,6 +246,9 @@ export default function App() {
 
       {/* Side panel — rendered outside main so it overlays all views */}
       <Panel />
+
+      {/* In-app dialog — replaces window.alert/confirm/prompt */}
+      <Dialog />
     </div>
   )
 }

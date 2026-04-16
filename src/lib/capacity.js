@@ -13,6 +13,24 @@ export function memberAvailableHours(member, sprintCount) {
 }
 
 /**
+ * Get allocation percentage for a member in a specific team group.
+ * If no group is active, returns 1 (100%). If member is not in the group, returns 0.
+ *
+ * @param {string} memberId
+ * @param {string} groupId
+ * @param {Array} teamGroups
+ * @returns {number} fraction (0–1)
+ */
+export function getMemberAllocationForGroup(memberId, groupId, teamGroups) {
+  if (!groupId) return 1
+  const group = teamGroups.find(g => g.id === groupId)
+  if (!group) return 1
+  const entry = group.members.find(m => m.memberId === memberId)
+  if (!entry) return 0
+  return entry.allocation / 100
+}
+
+/**
  * Return a sorted, deduplicated list of all disciplines present on the team.
  *
  * @param {Array} team
@@ -26,18 +44,23 @@ export function getTeamDisciplines(team) {
 
 /**
  * Calculate available capacity per sprint for a given discipline,
- * after applying the buffer percentage.
+ * after applying the buffer percentage. Optionally scales by team group allocation.
  *
  * @param {string} discipline
  * @param {Array} team
  * @param {number} sprintCount
  * @param {number} bufferPercent - 0–100
+ * @param {string} teamGroupId - optional, for applying member allocation
+ * @param {Array} teamGroups - optional, required if teamGroupId is set
  * @returns {number} hours
  */
-export function getDisciplineCapacityPerSprint(discipline, team, sprintCount, bufferPercent = 0) {
+export function getDisciplineCapacityPerSprint(discipline, team, sprintCount, bufferPercent = 0, teamGroupId = null, teamGroups = []) {
   const raw = team
     .filter(m => m.discipline === discipline)
-    .reduce((sum, m) => sum + memberAvailableHours(m, sprintCount) / sprintCount, 0)
+    .reduce((sum, m) => {
+      const allocation = getMemberAllocationForGroup(m.id, teamGroupId, teamGroups)
+      return sum + (memberAvailableHours(m, sprintCount) / sprintCount) * allocation
+    }, 0)
   return raw * (1 - bufferPercent / 100)
 }
 

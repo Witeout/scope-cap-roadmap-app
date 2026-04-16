@@ -1,6 +1,8 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useMemo, useRef, useCallback } from 'react'
 import { useDataStore } from '../../store/dataStore'
+import { useUIStore } from '../../store/uiStore'
 import DatePicker from '../ui/DatePicker'
+import { SUPPORTED_REGIONS, getHolidaysForRegions } from '../../data/holidayDb'
 
 // ─── Release color palette ────────────────────────────────────────────────────
 const RELEASE_COLORS = [
@@ -35,37 +37,102 @@ function FieldRow({ label, children }) {
   )
 }
 
-// ─── Card 1: Project Timeline ─────────────────────────────────────────────────
-function TimelineCard({ project, onUpdate }) {
+// ─── Card 1: Project Details (timeline + regions + holidays) ─────────────────
+const REGION_COLORS = {
+  CA: '#4a6fa5', US: '#8c5a4a', UK: '#4a8c5c',
+  AU: '#7a5b8c', FR: '#8c6f4a', DE: '#5b8c8c',
+}
+const regionColor = code => REGION_COLORS[code] || '#9e9f95'
+
+function TimelineCard({ project, onUpdate, onUpdateRegions, onAddHoliday, onRemoveHoliday }) {
+  const [name,      setName]      = useState(project.name      ?? '')
   const [startDate, setStartDate] = useState(project.startDate ?? '')
   const [endDate,   setEndDate]   = useState(project.endDate   ?? '')
   const [ongoing,   setOngoing]   = useState(project.ongoing   ?? true)
+  const [buffer,    setBuffer]    = useState(project.bufferPercent ?? 0)
+  const [showHolidayInfo, setShowHolidayInfo] = useState(false)
+  const [showAddCustom,  setShowAddCustom]  = useState(false)
+  const [customForm, setCustomForm] = useState({ name: '', startDate: '', endDate: '' })
 
-  const handleStartChange = e => {
-    const val = e.target.value || '2026-01-01'
-    setStartDate(val)
-    onUpdate({ startDate: val })
-  }
+  const regions       = project.regions       ?? []
+  const customHolidays = project.customHolidays ?? []
 
-  const handleEndChange = e => {
-    const val = e.target.value || null
-    setEndDate(val ?? '')
-    onUpdate({ endDate: val })
-  }
+  // Derive year range from project start date
+  const fromYear = useMemo(() => {
+    const y = project.startDate ? new Date(project.startDate).getFullYear() : new Date().getFullYear()
+    return Math.max(2025, y)
+  }, [project.startDate])
+  const toYear = Math.min(fromYear + 2, 2028)
+
+  // Auto-populated holidays from DB for active regions
+  const dbHolidays = useMemo(
+    () => getHolidaysForRegions(regions, fromYear, toYear),
+    [regions, fromYear, toYear]
+  )
+
+  // Merge and group all holidays by year
+  const allHolidays = useMemo(() => {
+    const merged = [
+      ...dbHolidays,
+      ...customHolidays.map(h => ({ ...h, source: 'custom' })),
+    ].sort((a, b) => (a.startDate ?? '').localeCompare(b.startDate ?? ''))
+    const byYear = {}
+    for (const h of merged) {
+      const y = h.startDate ? h.startDate.slice(0, 4) : 'Unknown'
+      if (!byYear[y]) byYear[y] = []
+      byYear[y].push(h)
+    }
+    return byYear
+  }, [dbHolidays, customHolidays])
 
   const handleOngoingChange = e => {
     const checked = e.target.checked
     setOngoing(checked)
-    if (checked) {
-      setEndDate('')
-      onUpdate({ ongoing: true, endDate: null })
-    } else {
-      onUpdate({ ongoing: false })
-    }
+    if (checked) { setEndDate(''); onUpdate({ ongoing: true, endDate: null }) }
+    else onUpdate({ ongoing: false })
   }
 
+  const handleBufferChange = e => {
+    const val = Math.max(0, Math.min(100, +e.target.value || 0))
+    setBuffer(val)
+    onUpdate({ bufferPercent: val })
+  }
+
+  const handleToggleRegion = code => {
+    if (regions.includes(code)) onUpdateRegions(regions.filter(r => r !== code))
+    else onUpdateRegions([...regions, code])
+  }
+
+  const handleAddCustom = () => {
+    if (!customForm.name.trim() || !customForm.startDate) return
+    onAddHoliday({
+      name:      customForm.name.trim(),
+      startDate: customForm.startDate,
+      endDate:   customForm.endDate || customForm.startDate,
+      region:    'Custom',
+    })
+    setCustomForm({ name: '', startDate: '', endDate: '' })
+    setShowAddCustom(false)
+  }
+
+  const hasHolidays = Object.keys(allHolidays).length > 0
+
   return (
-    <Card title="Project Timeline" icon="calendar_month">
+    <Card title="Project Details" icon="calendar_month">
+      {/* ── Project name ── */}
+      <FieldRow label="Project Name">
+        <input
+          type="text"
+          value={name}
+          className="flex-1 text-sm font-semibold bg-slate-50 border border-outline-variant/30 rounded-lg py-1.5 px-2 focus:outline-none focus:ring-2 focus:ring-primary/20"
+          onChange={e => setName(e.target.value)}
+          onBlur={e => { if (e.target.value.trim()) onUpdate({ name: e.target.value.trim() }) }}
+          onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+          placeholder="Project name"
+        />
+      </FieldRow>
+
+      {/* ── Timeline fields ── */}
       <FieldRow label="Start Date">
         <DatePicker
           value={startDate}
@@ -80,16 +147,136 @@ function TimelineCard({ project, onUpdate }) {
             onChange={val => { setEndDate(val ?? ''); onUpdate({ endDate: val || null }) }}
           />
           <label className="flex items-center gap-1.5 text-sm font-semibold text-slate-600 cursor-pointer select-none whitespace-nowrap">
-            <input
-              type="checkbox"
-              checked={ongoing}
-              className="accent-primary cursor-pointer"
-              onChange={handleOngoingChange}
-            />
+            <input type="checkbox" checked={ongoing} className="accent-primary cursor-pointer" onChange={handleOngoingChange} />
             Ongoing
           </label>
         </div>
       </FieldRow>
+      <FieldRow label="Capacity Buffer">
+        <div className="flex items-center gap-3 flex-1">
+          <input
+            type="number" min="0" max="100" step="1" value={buffer}
+            className="w-20 text-sm font-semibold bg-slate-50 border border-outline-variant/30 rounded-lg py-1.5 px-2 focus:outline-none focus:ring-2 focus:ring-primary/20"
+            onChange={handleBufferChange}
+          />
+          <span className="text-sm font-bold text-slate-600">% reserved</span>
+        </div>
+      </FieldRow>
+
+      {/* ── Divider ── */}
+      <div className="border-t border-outline-variant/20" />
+
+      {/* ── Regions ── */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Team Regions</span>
+          {regions.length > 0 && (
+            <button
+              onClick={() => { setShowHolidayInfo(v => !v); setShowAddCustom(false) }}
+              title={showHolidayInfo ? 'Hide stat holidays' : 'View stat holidays for selected regions'}
+              className="flex items-center justify-center rounded-full transition-colors"
+              style={{
+                width: 16, height: 16, flexShrink: 0,
+                background: showHolidayInfo ? '#4a6fa5' : '#e2e3dc',
+                color: showHolidayInfo ? 'white' : '#9e9f95',
+              }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 11, fontVariationSettings: "'FILL' 1" }}>info</span>
+            </button>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {SUPPORTED_REGIONS.map(({ code, label }) => {
+            const active = regions.includes(code)
+            const color  = regionColor(code)
+            return (
+              <button
+                key={code}
+                onClick={() => handleToggleRegion(code)}
+                className="flex items-center gap-1.5 text-xs font-bold rounded-full px-3 py-1 border transition-colors"
+                style={active
+                  ? { background: color + '18', color, borderColor: color + '60' }
+                  : { background: 'transparent', color: '#9e9f95', borderColor: '#e2e3dc' }
+                }
+                title={label}
+              >
+                {active && <span className="material-symbols-outlined" style={{ fontSize: 12, fontVariationSettings: "'FILL' 1" }}>check_circle</span>}
+                {code}
+                <span className="font-normal opacity-70">{label}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* ── Holiday info panel (toggled by "i" icon) ── */}
+      {showHolidayInfo && regions.length > 0 && (
+        <div className="flex flex-col gap-2 bg-slate-50 rounded-xl border border-outline-variant/20 p-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Stat Holidays</span>
+            <button
+              className="flex items-center gap-0.5 text-xs font-semibold text-primary hover:underline"
+              onClick={() => setShowAddCustom(v => !v)}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 13 }}>{showAddCustom ? 'remove' : 'add'}</span>
+              Custom
+            </button>
+          </div>
+
+          {/* Add custom holiday form */}
+          {showAddCustom && (
+            <div className="flex flex-col gap-2 bg-white rounded-lg p-3 border border-outline-variant/20">
+              <input
+                type="text"
+                placeholder="Holiday name"
+                value={customForm.name}
+                className="text-sm font-semibold bg-slate-50 border border-outline-variant/30 rounded-lg py-1.5 px-2 focus:outline-none focus:ring-2 focus:ring-primary/20"
+                onChange={e => setCustomForm(f => ({ ...f, name: e.target.value }))}
+              />
+              <div className="flex items-center gap-2">
+                <DatePicker value={customForm.startDate} onChange={val => setCustomForm(f => ({ ...f, startDate: val ?? '' }))} />
+                <span className="text-xs text-slate-400">to</span>
+                <DatePicker value={customForm.endDate} onChange={val => setCustomForm(f => ({ ...f, endDate: val ?? '' }))} />
+                <button className="text-sm font-bold text-primary hover:underline whitespace-nowrap" onClick={handleAddCustom}>
+                  Add
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Grouped by year */}
+          {!hasHolidays && (
+            <p className="text-xs text-slate-400 italic">No holidays found for the selected regions.</p>
+          )}
+          {Object.entries(allHolidays).sort().map(([year, holidays]) => (
+            <div key={year}>
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1 mt-1">{year}</div>
+              <div className="flex flex-col gap-1">
+                {holidays.map(h => {
+                  const color = h.region === 'Custom' ? '#9e9f95' : regionColor(h.region)
+                  return (
+                    <div key={h.id} className="flex items-center gap-2 rounded-lg bg-white border border-outline-variant/15 px-2.5 py-1.5">
+                      <div style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                      <span className="flex-1 text-xs font-semibold text-on-background truncate">{h.name}</span>
+                      <span className="text-xs text-slate-400 whitespace-nowrap flex-shrink-0">
+                        {h.startDate}{h.endDate && h.endDate !== h.startDate ? ` – ${h.endDate}` : ''}
+                      </span>
+                      <span className="text-xs font-bold rounded px-1.5 py-0.5 flex-shrink-0" style={{ background: color + '18', color }}>
+                        {h.region}
+                      </span>
+                      {h.source === 'custom' && (
+                        <button onClick={() => onRemoveHoliday(h.id)} title="Remove custom holiday">
+                          <span className="material-symbols-outlined text-slate-300 hover:text-error transition-colors" style={{ fontSize: 14 }}>close</span>
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   )
 }
@@ -129,6 +316,7 @@ function ReleaseCard({
   release, index,
   onUpdateRelease, onRemoveRelease,
   onAddMilestone, onUpdateMilestone, onRemoveMilestone, onReorderMilestone,
+  openDialog,
 }) {
   const [editingName, setEditingName] = useState(false)
   const dragSrcRef = useRef(null)
@@ -197,7 +385,12 @@ function ReleaseCard({
         {/* Remove release button */}
         <button
           className="flex-shrink-0"
-          onClick={() => { if (window.confirm(`Remove release "${release.name}"?`)) onRemoveRelease(release.id) }}
+          onClick={() => openDialog({
+            type: 'confirm',
+            title: `Remove "${release.name}"?`,
+            message: 'This will remove the release and clear its assignment from all linked initiatives, epics, and tasks.',
+            onConfirm: () => onRemoveRelease(release.id),
+          })}
           title="Remove release"
         >
           <span className="material-symbols-outlined text-base text-slate-300 hover:text-error transition-colors">delete</span>
@@ -249,46 +442,103 @@ function ReleaseCard({
   )
 }
 
-// ─── Card 3: Capacity Buffer ──────────────────────────────────────────────────
-function BufferCard({ project, onUpdate }) {
-  const [value, setValue] = useState(project.bufferPercent ?? 0)
-
-  const handleChange = e => {
-    const val = Math.max(0, Math.min(100, +e.target.value || 0))
-    setValue(val)
-    onUpdate({ bufferPercent: val })
-  }
+// ─── Project switcher header ──────────────────────────────────────────────────
+function ProjectSwitcher({ meta, onSwitch, onCreate }) {
+  const [open, setOpen] = useState(false)
+  const activeProject = meta.projects.find(p => p.id === meta.activeProjectId)
 
   return (
-    <Card title="Capacity Buffer" icon="tune">
-      <p className="text-sm text-slate-500">
-        Reserves a percentage of total capacity across all disciplines. Affects the capacity tooltip in Roadmap View.
-      </p>
-      <div className="flex items-center gap-3">
-        <input
-          type="number"
-          min="0"
-          max="100"
-          step="1"
-          value={value}
-          className="w-20 text-sm font-semibold bg-slate-50 border border-outline-variant/30 rounded-lg py-1.5 px-2 focus:outline-none focus:ring-2 focus:ring-primary/20"
-          onChange={handleChange}
-        />
-        <span className="text-sm font-bold text-slate-600">% reserved</span>
-      </div>
-    </Card>
+    <div className="flex items-center gap-3 px-6 pt-5 pb-3 border-b border-outline-variant/20 bg-surface-container-low relative">
+      {/* Current project name + dropdown trigger */}
+      <button
+        className="flex items-center gap-2 text-sm font-bold text-on-background hover:text-primary transition-colors"
+        onClick={() => setOpen(v => !v)}
+        title="Switch project"
+      >
+        <span className="material-symbols-outlined text-base text-slate-400">folder_open</span>
+        {activeProject?.name || 'Untitled Project'}
+        <span className="material-symbols-outlined text-base text-slate-400" style={{ transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+          expand_more
+        </span>
+      </button>
+
+      {/* Dropdown */}
+      {open && (
+        <>
+          {/* Backdrop */}
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute left-6 top-full mt-1 z-20 bg-white border border-outline-variant/30 rounded-xl shadow-lg overflow-hidden min-w-56">
+            {meta.projects.map(p => (
+              <button
+                key={p.id}
+                className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm text-left hover:bg-surface-container transition-colors ${
+                  p.id === meta.activeProjectId ? 'font-bold text-primary bg-primary/5' : 'font-semibold text-on-background'
+                }`}
+                onClick={() => { onSwitch(p.id); setOpen(false) }}
+              >
+                <span className="material-symbols-outlined text-base text-slate-400">folder</span>
+                {p.name}
+                {p.id === meta.activeProjectId && (
+                  <span className="material-symbols-outlined text-sm text-primary ml-auto">check</span>
+                )}
+              </button>
+            ))}
+            <div className="border-t border-outline-variant/20" />
+            <button
+              className="w-full flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-primary hover:bg-surface-container transition-colors"
+              onClick={() => { onCreate(); setOpen(false) }}
+            >
+              <span className="material-symbols-outlined text-base">add_circle</span>
+              New Project
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
 // ─── Main component ────────────────────────────────────────────────────────────
 export default function ProjectView() {
   const {
-    data, updateProject,
+    meta, data, updateProject,
+    createProject, switchProject,
     addRelease, updateRelease, removeRelease,
     addMilestone, updateMilestone, removeMilestone,
+    updateRegions, addHoliday, removeHoliday,
   } = useDataStore()
+  const { openDialog, clearScenario, closePanel } = useUIStore()
   const project = data.project
   const releases = [...(project.releases ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+
+  const handleSwitchProject = (id) => {
+    closePanel?.()
+    clearScenario?.()
+    switchProject(id)
+  }
+
+  const handleNewProject = () => {
+    openDialog({
+      type: 'prompt',
+      title: 'New Project',
+      message: 'Give this project a name:',
+      defaultValue: 'New Project',
+      onConfirm: name => {
+        if (!name?.trim()) return
+        openDialog({
+          type: 'prompt',
+          title: 'Start Date',
+          message: 'Enter the project start date (YYYY-MM-DD):',
+          defaultValue: new Date().toISOString().slice(0, 10),
+          onConfirm: startDate => {
+            closePanel?.()
+            clearScenario?.()
+            createProject(name.trim(), startDate?.trim() || undefined)
+          },
+        })
+      },
+    })
+  }
 
   // ── Project field updates ──────────────────────────────────────────────────
   const handleUpdateProject = useCallback(updates => {
@@ -336,11 +586,19 @@ export default function ProjectView() {
   }, [project.releases, updateMilestone])
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="flex flex-col gap-6 max-w-2xl">
+    <div className="flex-1 overflow-y-auto flex flex-col">
+      <ProjectSwitcher
+        meta={meta}
+        onSwitch={handleSwitchProject}
+        onCreate={handleNewProject}
+      />
+      <div className="grid grid-cols-2 gap-6 p-6">
         <TimelineCard
           project={project}
           onUpdate={handleUpdateProject}
+          onUpdateRegions={updateRegions}
+          onAddHoliday={addHoliday}
+          onRemoveHoliday={removeHoliday}
         />
 
         {/* Release cards */}
@@ -355,6 +613,7 @@ export default function ProjectView() {
             onUpdateMilestone={handleUpdateMilestone}
             onRemoveMilestone={handleRemoveMilestone}
             onReorderMilestone={handleReorderMilestone}
+            openDialog={openDialog}
           />
         ))}
 
@@ -367,11 +626,8 @@ export default function ProjectView() {
           Add Release
         </button>
 
-        <BufferCard
-          project={project}
-          onUpdate={handleUpdateProject}
-        />
       </div>
     </div>
   )
+
 }
