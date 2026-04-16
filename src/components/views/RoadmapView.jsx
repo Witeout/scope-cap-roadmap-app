@@ -12,18 +12,19 @@ import { useGanttDrag }    from '../../hooks/useGanttDrag'
 import { useDepDraw }      from '../../hooks/useDepDraw'
 import DependencyArrows    from './DependencyArrows'
 import { TYPE_ICON, TYPE_COLOR } from '../../lib/display'
-import FilterPills from '../ui/FilterPills'
+import { getHolidaysForRegions } from '../../data/holidayDb'
+import MultiSelectDropdown from '../ui/MultiSelectDropdown'
 import { getCapacityInfo } from '../../lib/capacity'
 
 // ─── Layout constants ─────────────────────────────────────────────────────────
-const BASE_SPRINT_W = 100
+const BASE_SPRINT_W = 125
 const ROW_H         = 52   // sprint header row height (fixed)
 const MIN_LABEL_W   = 140
 const MAX_LABEL_W   = 520
 
 // ─── Row heights by hierarchy ─────────────────────────────────────────────────
 // Tallest → shortest: release header → initiative → epic → task
-const ROW_HEIGHTS = { releaseHeader: 52, initiative: 44, epic: 36, task: 28 }
+const ROW_HEIGHTS = { releaseHeader: 42, initiative: 35, epic: 29, task: 30 }
 
 // ─── Row backgrounds ──────────────────────────────────────────────────────────
 const ROW_BG = { initiative: '#e8e7df', epic: '#efeee6', task: 'white' }
@@ -139,11 +140,42 @@ function ReleaseHeaderRow({ release, sprints, SPRINT_W, ROW_H, LABEL_W, collapse
 
 // ─── Roadmap toolbar ──────────────────────────────────────────────────────────
 function RoadmapToolbar({
-  scenarioId, compareMode, roadmapLocked, data,
-  onLockToggle, onAddScenario, onCompare, onCommitScenario, onExitScenario, onExitCompare,
+  scenarioId, compareMode, compareBase, compareTarget, roadmapLocked, data,
+  onLockToggle, onAddScenario, onCompare, onCommitScenario, onExitScenario, onExitCompare, onSwapFocus,
   filterPills,
   depIssueCount, showDepIssues, onToggleDepIssues,
+  showHolidays, onToggleHolidays,
 }) {
+  // Compare mode takes priority — suppresses the scenario commit toolbar until the user exits comparison
+  if (compareMode) {
+    const baseName   = compareBase   ? (data.scenarios.find(s => s.id === compareBase)?.name   ?? 'Unknown') : 'Main Roadmap'
+    const targetName = compareTarget ? (data.scenarios.find(s => s.id === compareTarget)?.name ?? 'Unknown') : 'Main Roadmap'
+    return (
+      <div className="roadmap-toolbar">
+        {/* Colour-coded legend */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ width: 13, height: 13, borderRadius: 3, border: '1.5px dashed rgba(80,110,160,0.75)', background: 'rgba(80,110,160,0.25)', flexShrink: 0 }} />
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#4e6a96' }}>Baseline: {baseName}</span>
+          </div>
+          <span className="material-symbols-outlined" style={{ fontSize: 13, color: '#b0b3a8' }}>arrow_forward</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ width: 13, height: 13, borderRadius: 3, background: 'rgba(87,99,76,0.82)', flexShrink: 0 }} />
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#57634c' }}>Proposed: {targetName}</span>
+          </div>
+        </div>
+        <button className="roadmap-btn roadmap-btn--secondary" onClick={onSwapFocus}>
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>swap_horiz</span>
+          Swap Focus
+        </button>
+        <button className="roadmap-btn roadmap-btn--secondary" onClick={onExitCompare}>
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>close</span>
+          Exit Comparison
+        </button>
+      </div>
+    )
+  }
+
   if (scenarioId) {
     const scn = data.scenarios.find(s => s.id === scenarioId)
     return (
@@ -170,21 +202,6 @@ function RoadmapToolbar({
         <button className="roadmap-btn roadmap-btn--secondary" onClick={onExitScenario}>
           <span className="material-symbols-outlined" style={{ fontSize: 14 }}>close</span>
           Back to Main Roadmap
-        </button>
-      </div>
-    )
-  }
-
-  if (compareMode) {
-    return (
-      <div className="roadmap-toolbar">
-        <span className="roadmap-toolbar__badge">
-          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>compare_arrows</span>
-          Comparing scenarios
-        </span>
-        <button className="roadmap-btn roadmap-btn--secondary" onClick={onExitCompare}>
-          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>close</span>
-          Exit Comparison
         </button>
       </div>
     )
@@ -221,6 +238,14 @@ function RoadmapToolbar({
       <button className="roadmap-btn roadmap-btn--secondary" onClick={onCompare}>
         <span className="material-symbols-outlined" style={{ fontSize: 16 }}>compare_arrows</span>
         Compare Scenarios
+      </button>
+      <button
+        className={`roadmap-btn ${showHolidays ? 'roadmap-btn--primary' : 'roadmap-btn--secondary'}`}
+        onClick={onToggleHolidays}
+        title={showHolidays ? 'Hide holiday indicators' : 'Show holiday indicators'}
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: 16 }}>event</span>
+        Holidays
       </button>
       <button
         className={`roadmap-btn ${roadmapLocked ? 'roadmap-btn--primary' : 'roadmap-btn--secondary'}`}
@@ -369,7 +394,7 @@ function CompareModal({ scenarios, onConfirm, onCancel }) {
 export default function RoadmapView() {
   const {
     data, sprints,
-    updateItem, createItem,
+    updateItem, createItem, removeItem,
     commitScenario, createScenario, deleteScenario,
     addDependency, removeDependency,
   } = useDataStore()
@@ -377,24 +402,27 @@ export default function RoadmapView() {
   const {
     scenarioId, setScenarioId, clearScenario,
     compareMode, compareBase, compareTarget,
-    openCompare, closeCompare,
+    openCompare, closeCompare, setCompareBase, setCompareTarget,
     roadmapLocked, toggleRoadmapLocked,
     selectedDepId, setSelectedDepId, clearSelectedDep,
     ganttLabelW, setGanttLabelW,
     openPanel, panel,
-    teamGroupFilter, setTeamGroupFilter,
+    pendingDelete, clearPendingDelete,
     collapsedReleases, toggleReleaseCollapsed,
-    releaseFilter, setReleaseFilter, clearReleaseFilter,
+    openDialog,
   } = useUIStore()
 
   const [showCompareModal, setShowCompareModal] = useState(false)
   const [capacityTip,     setCapacityTip]     = useState(null) // { sprintId, x, y }
   const [showDepIssues,   setShowDepIssues]   = useState(false)
   const [zoomLevel,       setZoomLevel]       = useState(1)    // 0.5 – 2.0
+  const [showHolidays,    setShowHolidays]    = useState(true)
 
   // ── View filters ───────────────────────────────────────────────────────────
-  const ALL_TYPES = new Set(['initiative', 'epic', 'task'])
-  const [activeFilters, setActiveFilters] = useState(new Set(ALL_TYPES))
+  // Empty Set = all active (no filter applied)
+  const [activeFilters,    setActiveFilters]    = useState(new Set())
+  const [releaseFilters,   setReleaseFilters]   = useState(new Set())
+  const [teamGroupFilters, setTeamGroupFilters] = useState(new Set())
 
   // ── Layout ─────────────────────────────────────────────────────────────────
   const SPRINT_W = Math.round(BASE_SPRINT_W * zoomLevel)
@@ -428,6 +456,33 @@ export default function RoadmapView() {
     return set
   }, [sprints, data.team, activeTasks, data.project?.bufferPercent])
 
+  // ── Holiday → sprint overlap map ──────────────────────────────────────────
+  const sprintHolidayMap = useMemo(() => {
+    const map = new Map()
+    if (!showHolidays) return map
+    const regions = data.project?.regions ?? []
+    // Derive year range from sprint dates
+    const fromYear = sprints.length ? sprints[0].start.getFullYear()  : new Date().getFullYear()
+    const toYear   = sprints.length ? sprints[sprints.length - 1].end.getFullYear() : fromYear + 2
+    // Merge DB holidays + user custom holidays
+    const dbHolidays     = getHolidaysForRegions(regions, Math.max(2025, fromYear), Math.min(2028, toYear + 1))
+    const customHolidays = (data.project?.customHolidays ?? [])
+    const holidays = [...dbHolidays, ...customHolidays]
+    if (!holidays.length) return map
+    for (const sp of sprints) {
+      const spStart = sp.start
+      const spEnd   = sp.end
+      const matching = holidays.filter(h => {
+        if (!h.startDate) return false
+        const hStart = new Date(h.startDate); hStart.setHours(0, 0, 0, 0)
+        const hEnd   = new Date(h.endDate ?? h.startDate); hEnd.setHours(23, 59, 59, 999)
+        return hStart <= spEnd && hEnd >= spStart
+      })
+      if (matching.length > 0) map.set(sp.id, matching)
+    }
+    return map
+  }, [sprints, data.project?.regions, data.project?.customHolidays, showHolidays])
+
   // ── Build rows ─────────────────────────────────────────────────────────────
   const rows = useMemo(
     () => buildGanttRows(data, activeScenario),
@@ -443,7 +498,7 @@ export default function RoadmapView() {
       if (row.type === 'releaseHeader') {
         currentReleaseId = row.item.id
         // When a release filter is active, skip headers not matching it
-        if (releaseFilter && currentReleaseId !== releaseFilter) continue
+        if (releaseFilters.size > 0 && !releaseFilters.has(currentReleaseId)) continue
         result.push(row)
         continue
       }
@@ -452,19 +507,19 @@ export default function RoadmapView() {
       if (currentReleaseId !== undefined && collapsedReleases[currentReleaseId]) continue
 
       // Skip items not matching release filter
-      if (releaseFilter && row.releaseId !== releaseFilter) continue
+      if (releaseFilters.size > 0 && !releaseFilters.has(row.releaseId)) continue
 
-      // Type filter
-      if (!activeFilters.has(row.type)) continue
+      // Type filter (empty = all active)
+      if (activeFilters.size > 0 && !activeFilters.has(row.type)) continue
 
-      // Team group filter
-      if (teamGroupFilter && row.item.teamId !== teamGroupFilter) continue
+      // Team group filter (empty = all active)
+      if (teamGroupFilters.size > 0 && !teamGroupFilters.has(row.item.teamId)) continue
 
       result.push(row)
     }
 
     return result
-  }, [rows, collapsedReleases, releaseFilter, activeFilters, teamGroupFilter])
+  }, [rows, collapsedReleases, releaseFilters, activeFilters, teamGroupFilters])
 
   // ── Compute sprint ranges for every row item ───────────────────────────────
   const ranges = useMemo(() => {
@@ -588,47 +643,62 @@ export default function RoadmapView() {
 
   // ── Toolbar actions ────────────────────────────────────────────────────────
   const handleAddScenario = () => {
-    const name = window.prompt('Scenario name:', 'New Scenario')
-    if (!name?.trim()) return
-    const id = createScenario(name.trim())
-    setScenarioId(id)
+    openDialog({
+      type: 'prompt',
+      title: 'New Scenario',
+      message: 'Give this scenario a name:',
+      defaultValue: 'New Scenario',
+      onConfirm: name => {
+        if (!name?.trim()) return
+        const id = createScenario(name.trim())
+        setScenarioId(id)
+      },
+    })
   }
 
   const handleCommitScenario = () => {
     if (!scenarioId) return
     const scn = data.scenarios.find(s => s.id === scenarioId)
-    if (!window.confirm(`Commit scenario "${scn?.name}" to the main roadmap?\n\nThis will apply all sprint changes, add new tasks to the backlog, and delete this scenario.`)) return
-    commitScenario(scenarioId)
-    clearScenario()
+    openDialog({
+      type: 'confirm',
+      title: `Commit "${scn?.name}"?`,
+      message: 'This will apply all sprint changes to the main roadmap, add any new scenario tasks to the backlog, and delete this scenario. This cannot be undone.',
+      onConfirm: () => {
+        commitScenario(scenarioId)
+        clearScenario()
+      },
+    })
   }
 
   const handleExitScenario = () => clearScenario()
 
-  const handleExitCompare = () => closeCompare()
+  const handleExitCompare = () => { closeCompare(); clearScenario() }
 
   const handleCompareConfirm = (base, target) => {
     setShowCompareModal(false)
     openCompare(base, target)
+    // Set the active view to the target scenario so comparison is immediately visible
+    if (target) setScenarioId(target)
+    else clearScenario()
+  }
+
+  const handleSwapFocus = () => {
+    const newBase   = compareTarget
+    const newTarget = compareBase
+    setCompareBase(newBase)
+    setCompareTarget(newTarget)
+    if (newTarget) setScenarioId(newTarget)
+    else clearScenario()
   }
 
   // ── Add task in cell ───────────────────────────────────────────────────────
   const handleAddTaskInCell = (epicId, sprintId) => {
     if (activeScenario) {
-      // Create scenario-private task
-      const scn = data.scenarios.find(s => s.id === scenarioId)
-      if (!scn) return
-      const maxOrder = scn.tasks.length ? Math.max(...scn.tasks.map(t => t.order)) + 1 : 0
-      const newTask = {
-        id: `TASK-scn-${Date.now()}`,
-        order: maxOrder,
+      const item = createItem('task', {
         summary: 'New Task', priority: 'Medium', assignee: 'Unassigned',
-        estimate: null, discipline: null, description: '',
-        epicId, sprintId,
-      }
-      scn.tasks.push(newTask)
-      // Trigger a store save via a dummy update
-      updateItem('task', data.tasks[0]?.id, {}, scenarioId)
-      openPanel('task', newTask.id)
+        estimate: null, discipline: null, description: '', epicId, sprintId,
+      }, scenarioId)
+      if (item) openPanel('task', item.id)
     } else {
       const item = createItem('task', {
         summary: 'New Task', priority: 'Medium', assignee: 'Unassigned',
@@ -667,106 +737,62 @@ export default function RoadmapView() {
       <RoadmapToolbar
         scenarioId={scenarioId}
         compareMode={compareMode}
+        compareBase={compareBase}
+        compareTarget={compareTarget}
         roadmapLocked={roadmapLocked}
         data={data}
         onLockToggle={toggleRoadmapLocked}
         onAddScenario={handleAddScenario}
         onCompare={() => {
-          if (!data.scenarios.length) { alert('Create at least one scenario to compare.'); return }
+          if (!data.scenarios.length) {
+            openDialog({
+              type: 'alert',
+              title: 'No scenarios yet',
+              message: 'Create at least one scenario before comparing. Use the "Add Scenario" button to get started.',
+            })
+            return
+          }
           setShowCompareModal(true)
         }}
         onCommitScenario={handleCommitScenario}
         onExitScenario={handleExitScenario}
         onExitCompare={handleExitCompare}
+        onSwapFocus={handleSwapFocus}
         filterPills={
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', flex: 1 }}>
-            <FilterPills
-              active={activeFilters}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <MultiSelectDropdown
+              label="Issue Types"
+              options={[
+                { key: 'initiative', label: 'Initiative', icon: 'bolt',       color: '#7a583d' },
+                { key: 'epic',       label: 'Epic',       icon: 'view_quilt', color: '#57634c' },
+                { key: 'task',       label: 'Task',       icon: 'task_alt',   color: '#5b5f63' },
+              ]}
+              selected={activeFilters}
               onChange={setActiveFilters}
             />
-            {/* Release filter */}
             {(data.project?.releases ?? []).length > 0 && (
-              <select
-                value={releaseFilter ?? ''}
-                onChange={e => e.target.value ? setReleaseFilter(e.target.value) : clearReleaseFilter()}
-                style={{
-                  fontSize: 13, fontWeight: 600, padding: '6px 10px',
-                  border: `1px solid ${releaseFilter ? '#4a6fa5' : '#d1cfc4'}`,
-                  borderRadius: 6,
-                  background: releaseFilter ? '#4a6fa510' : '#fbf9f4',
-                  cursor: 'pointer', color: '#31332c',
-                }}
-                title="Filter by release"
-              >
-                <option value="">All Releases</option>
-                {(data.project.releases ?? []).map(r => (
-                  <option key={r.id} value={r.id}>{r.name}</option>
-                ))}
-              </select>
+              <MultiSelectDropdown
+                label="Releases"
+                options={(data.project.releases ?? []).map(r => ({ key: r.id, label: r.name }))}
+                selected={releaseFilters}
+                onChange={setReleaseFilters}
+              />
             )}
-            {/* Team group filter */}
             {(data.teamGroups ?? []).length > 0 && (
-              <select
-                value={teamGroupFilter ?? ''}
-                onChange={e => setTeamGroupFilter(e.target.value || null)}
-                style={{
-                  fontSize: 13, fontWeight: 600, padding: '6px 10px',
-                  border: '1px solid #d1cfc4',
-                  borderRadius: 6,
-                  background: '#fbf9f4',
-                  cursor: 'pointer', color: '#31332c',
-                }}
-                title="Filter by team"
-              >
-                <option value="">All Teams</option>
-                {(data.teamGroups ?? []).map(g => (
-                  <option key={g.id} value={g.id}>{g.name}</option>
-                ))}
-              </select>
+              <MultiSelectDropdown
+                label="Teams"
+                options={(data.teamGroups ?? []).map(g => ({ key: g.id, label: g.name }))}
+                selected={teamGroupFilters}
+                onChange={setTeamGroupFilters}
+              />
             )}
-
-            {/* Zoom controls */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto', flexShrink: 0 }}>
-              <button
-                title="Zoom out"
-                onClick={() => setZoomLevel(z => Math.max(0.5, +(z - 0.25).toFixed(2)))}
-                disabled={zoomLevel <= 0.5}
-                style={{
-                  width: 26, height: 26, borderRadius: 5, border: '1px solid #d1cfc4',
-                  background: '#fbf9f4', cursor: zoomLevel <= 0.5 ? 'not-allowed' : 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 16, lineHeight: 1, color: zoomLevel <= 0.5 ? '#c5c6bb' : '#5e6058',
-                  fontWeight: 700, padding: 0,
-                }}
-              >−</button>
-              <button
-                title="Reset zoom to 100%"
-                onClick={() => setZoomLevel(1)}
-                style={{
-                  padding: '3px 7px', borderRadius: 5, border: '1px solid #d1cfc4',
-                  background: zoomLevel !== 1 ? '#4a6fa510' : '#fbf9f4',
-                  cursor: 'pointer', fontSize: 11, fontWeight: 700,
-                  color: zoomLevel !== 1 ? '#4a6fa5' : '#5e6058',
-                }}
-              >{Math.round(zoomLevel * 100)}%</button>
-              <button
-                title="Zoom in"
-                onClick={() => setZoomLevel(z => Math.min(2, +(z + 0.25).toFixed(2)))}
-                disabled={zoomLevel >= 2}
-                style={{
-                  width: 26, height: 26, borderRadius: 5, border: '1px solid #d1cfc4',
-                  background: '#fbf9f4', cursor: zoomLevel >= 2 ? 'not-allowed' : 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 16, lineHeight: 1, color: zoomLevel >= 2 ? '#c5c6bb' : '#5e6058',
-                  fontWeight: 700, padding: 0,
-                }}
-              >+</button>
-            </div>
           </div>
         }
         depIssueCount={brokenDeps.length}
         showDepIssues={showDepIssues}
         onToggleDepIssues={() => setShowDepIssues(v => !v)}
+        showHolidays={showHolidays}
+        onToggleHolidays={() => setShowHolidays(v => !v)}
       />
 
       {/* Dependency issues side panel */}
@@ -842,6 +868,17 @@ export default function RoadmapView() {
                     warning
                   </span>
                 )}
+                {sprintHolidayMap.has(sp.id) && (
+                  <span
+                    className="material-symbols-outlined"
+                    style={{ fontSize: 11, color: '#4a8c5c', fontVariationSettings: "'FILL' 1", position: 'absolute', top: 3, left: 3 }}
+                    title={sprintHolidayMap.get(sp.id).map(h =>
+                      `${h.name} (${h.region})${h.endDate && h.endDate !== h.startDate ? `: ${h.startDate} – ${h.endDate}` : `: ${h.startDate}`}`
+                    ).join('\n')}
+                  >
+                    event
+                  </span>
+                )}
                 <span style={{ fontSize: 10, fontWeight: 700, color: isCur ? '#5b5f63' : '#5e6058', whiteSpace: 'nowrap' }}>
                   {sp.label}
                 </span>
@@ -861,7 +898,7 @@ export default function RoadmapView() {
                   release={rowDef.item}
                   sprints={sprints}
                   SPRINT_W={SPRINT_W}
-                  ROW_H={ROW_H}
+                  ROW_H={ROW_HEIGHTS.releaseHeader}
                   LABEL_W={LABEL_W}
                   collapsed={!!collapsedReleases[rowDef.item.id]}
                   onToggle={() => toggleReleaseCollapsed(rowDef.item.id)}
@@ -922,9 +959,75 @@ export default function RoadmapView() {
         />
       </div>
 
+      {/* Bottom bar — view controls */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+        padding: '4px 14px', background: '#fbf9f4',
+        borderTop: '1px solid #c5c6bb', flexShrink: 0, gap: 6,
+      }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: '#9e9f95', textTransform: 'uppercase', letterSpacing: '.06em', marginRight: 2 }}>Zoom</span>
+        <button
+          title="Zoom out"
+          onClick={() => setZoomLevel(z => Math.max(0.5, +(z - 0.25).toFixed(2)))}
+          disabled={zoomLevel <= 0.5}
+          style={{
+            width: 22, height: 22, borderRadius: 5, border: '1px solid #d1cfc4',
+            background: '#fbf9f4', cursor: zoomLevel <= 0.5 ? 'not-allowed' : 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 14, lineHeight: 1, color: zoomLevel <= 0.5 ? '#c5c6bb' : '#5e6058',
+            fontWeight: 700, padding: 0, flexShrink: 0,
+          }}
+        >−</button>
+        <button
+          title="Reset zoom to 100%"
+          onClick={() => setZoomLevel(1)}
+          style={{
+            padding: '2px 6px', borderRadius: 5, border: '1px solid #d1cfc4',
+            background: zoomLevel !== 1 ? '#4a6fa510' : '#fbf9f4',
+            cursor: 'pointer', fontSize: 11, fontWeight: 700,
+            color: zoomLevel !== 1 ? '#4a6fa5' : '#5e6058', flexShrink: 0,
+          }}
+        >{Math.round(zoomLevel * 100)}%</button>
+        <button
+          title="Zoom in"
+          onClick={() => setZoomLevel(z => Math.min(2, +(z + 0.25).toFixed(2)))}
+          disabled={zoomLevel >= 2}
+          style={{
+            width: 22, height: 22, borderRadius: 5, border: '1px solid #d1cfc4',
+            background: '#fbf9f4', cursor: zoomLevel >= 2 ? 'not-allowed' : 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 14, lineHeight: 1, color: zoomLevel >= 2 ? '#c5c6bb' : '#5e6058',
+            fontWeight: 700, padding: 0, flexShrink: 0,
+          }}
+        >+</button>
+      </div>
+
       {/* Lock wash overlay */}
       {locked && (
         <div style={{ position: 'absolute', top: 41, left: 0, right: 0, bottom: 0, background: 'rgba(251,249,244,0.45)', pointerEvents: 'none', zIndex: 50 }} />
+      )}
+
+      {/* Delete confirmation modal */}
+      {pendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-80">
+            <p className="text-sm font-bold text-on-background mb-1">Delete {pendingDelete.type}?</p>
+            <p className="text-xs text-slate-500 mb-5">This cannot be undone.</p>
+            <div className="flex gap-3">
+              <button
+                className="flex-1 py-2 rounded-xl bg-error text-white text-sm font-bold hover:bg-error/90 transition-all"
+                onClick={() => {
+                  removeItem(pendingDelete.type, pendingDelete.id, pendingDelete.scenarioId ?? null)
+                  clearPendingDelete()
+                }}
+              >Delete</button>
+              <button
+                className="flex-1 py-2 rounded-xl border border-slate-200 text-sm font-semibold hover:bg-slate-50 transition-all"
+                onClick={clearPendingDelete}
+              >Cancel</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Compare modal */}
@@ -1078,7 +1181,7 @@ function GanttRow({
             className={`gantt-cell${isCurCol ? ' current-sprint-col' : ''}`}
             style={{ height: ROW_H, position: 'relative' }}
           >
-            {/* Compare-mode ghost bar */}
+            {/* Compare-mode ghost bar — shows baseline scenario position */}
             {compareMode && baseRange && si === baseRange.startIndex && (() => {
               const sameAsActive = range &&
                 baseRange.startIndex === range.startIndex &&
@@ -1087,8 +1190,8 @@ function GanttRow({
               const ghostSpan = baseRange.endIndex - baseRange.startIndex + 1
               return (
                 <div
-                  className={`gantt-bar gantt-bar--${type}`}
-                  style={{ left: 10, width: ghostSpan * SPRINT_W - 20, opacity: 0.35, cursor: 'default', pointerEvents: 'none', filter: 'blur(0.6px)', zIndex: 2 }}
+                  className="gantt-bar gantt-bar--ghost"
+                  style={{ left: 10, width: ghostSpan * SPRINT_W - 20, height: ROW_H - 6 }}
                 >
                   {item.summary}
                 </div>
@@ -1104,6 +1207,7 @@ function GanttRow({
               const barStyle = {
                 left: 10,
                 width: barW,
+                height: ROW_H - 6,
                 ...(locked || compareMode ? { cursor: 'default' } : {}),
                 ...(locked ? { opacity: 0.75 } : {}),
                 ...(isViol ? { outline: '2px solid rgba(175,50,45,0.55)', outlineOffset: 1 } : {}),
@@ -1117,8 +1221,12 @@ function GanttRow({
                     if (!el || locked || compareMode) return
                     // Register for dep-draw hit testing
                     barRegistryRef.current.push({ id: item.id, el })
-                    // Attach drag behaviour
-                    attachBarDrag(el, item, type, range, sprints, LABEL_W, ROW_H, SPRINT_W)
+                    // Clean up any previously attached drag listener before re-attaching.
+                    // Without this, every re-render (triggered by a data change) would add
+                    // a new mousedown listener with a stale closure, causing scenario drags
+                    // to call updateItem on base data instead of updateScenarioSprintOverride.
+                    if (el.__dragCleanup) el.__dragCleanup()
+                    el.__dragCleanup = attachBarDrag(el, item, type, range, sprints, LABEL_W, ROW_H, SPRINT_W)
                   }}
                   title={`${item.id}: ${item.summary}`}
                 >
@@ -1138,13 +1246,13 @@ function GanttRow({
                       <div
                         className="gantt-dep-handle"
                         title="← Blocked By: drag to the task that must finish first (this task depends on it)"
-                        style={{ left: 10 }}
+                        style={{ left: -5, top: Math.round((ROW_H - 6) / 2) - 5, transform: 'none' }}
                         onMouseDown={e => { e.preventDefault(); e.stopPropagation(); startDepDraw(item.id, e.currentTarget, 'left') }}
                       />
                       <div
                         className="gantt-dep-handle"
                         title="Blocks →: drag to the task that depends on this one finishing first"
-                        style={{ left: 10 + barW }}
+                        style={{ left: barW - 5, top: Math.round((ROW_H - 6) / 2) - 5, transform: 'none' }}
                         onMouseDown={e => { e.preventDefault(); e.stopPropagation(); startDepDraw(item.id, e.currentTarget, 'right') }}
                       />
                     </>

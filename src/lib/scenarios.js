@@ -60,8 +60,11 @@ export function getDepsForItem(itemId, deps) {
  */
 export function buildScenario(name, nextCounter, baseTasks, baseDeps) {
   const id = `SCN-${nextCounter}`
+  // Start with empty sprintOverrides — base task positions are inherited by default.
+  // Only tasks the user explicitly moves within a scenario get an entry here.
+  // This ensures changes to the original view are reflected in scenarios that
+  // have no explicit override for the affected task (Option A behavior).
   const sprintOverrides = {}
-  baseTasks.forEach(t => { sprintOverrides[t.id] = t.sprintId })
   const dependencies = JSON.parse(JSON.stringify(baseDeps))
   const scenario = { id, name, createdAt: Date.now(), sprintOverrides, dependencies, tasks: [] }
   return { scenario, id }
